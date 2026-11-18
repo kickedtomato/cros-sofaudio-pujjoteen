@@ -1,8 +1,20 @@
 # install.ps1 - Chromebook Audio for Windows (pujjoteen: Intel Alder Lake-N + MAX98360A + ALC5682I-VD)
 #
-#   -Force     install even if the hardware check fails (not recommended)
+#   -Force       install even if the hardware check fails (not recommended)
+#   -Unattended  never prompt (used by the NSIS setup); see exit codes below
 #
-param([switch]$Force)
+# The package is either
+#   * Microsoft-signed (attestation signing through the Windows Hardware Dev
+#     Center): every driver catalog is signed by "Microsoft Windows Hardware
+#     Compatibility Publisher". Works with Secure Boot on; no Test Mode, no
+#     certificate import, no code-integrity policy change.
+#   * test-signed (local builds): needs Windows Test Mode (Secure Boot off),
+#     imports the package certificate and disables the vulnerable-driver
+#     blocklist, as upstream cros-sofaudio does.
+#
+# Exit codes: 0 installed, 1 failed, 2 Test Mode required but off (test-signed
+# package), 3 unsupported hardware.
+param([switch]$Force, [switch]$Unattended)
 
 $ErrorActionPreference = 'Stop'
 $here    = $PSScriptRoot
@@ -10,9 +22,10 @@ $version = (Get-Content (Join-Path $here 'VERSION.txt') -ErrorAction SilentlyCon
 $regRoot = 'HKLM:\SOFTWARE\CrosSofAudio'
 $progDir = Join-Path $env:ProgramFiles 'CrosSofAudio'
 $svcName = 'csaudioswitcher'
+$msPublisher = 'Microsoft Windows Hardware Compatibility Publisher'
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
-function Fail($m) { Write-Host "`n$m" -ForegroundColor Red; exit 1 }
+function Fail($m, [int]$code = 1) { Write-Host "`n$m" -ForegroundColor Red; exit $code }
 
 function Normalize-Thumbprint([string]$value) {
     return ($value -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
@@ -36,27 +49,40 @@ function Add-CertificateToStore([string]$store, [string]$path) {
     }
 }
 
-function Test-PackageSignature([string]$path, [string]$expectedThumbprint) {
+function Get-PackageSignature([string]$rel) {
+    $path = Join-Path $here $rel
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Fail "The signed package file is missing: $path"
     }
+    return Get-AuthenticodeSignature -LiteralPath $path
+}
 
-    $signature = Get-AuthenticodeSignature -LiteralPath $path
+function Test-ValidSignature($signature, [string]$rel) {
     if (-not $signature.SignerCertificate) {
-        Fail "The package file is not signed: $path (status: $($signature.Status))"
+        Fail "The package file is not signed: $rel (status: $($signature.Status))"
     }
-
-    $actualThumbprint = Normalize-Thumbprint $signature.SignerCertificate.Thumbprint
-    if ($actualThumbprint -ne $expectedThumbprint) {
-        Fail ("The package contains mixed signing certificates.`n" +
-              "Expected: $expectedThumbprint`nFound:    $actualThumbprint`nFile:     $path")
-    }
-
     if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-        Fail ("Windows could not validate the signature on:`n$path`n" +
+        Fail ("Windows could not validate the signature on:`n$rel`n" +
               "Status: $($signature.Status) - $($signature.StatusMessage)")
     }
 }
+
+$driverCatalogs = @(
+    'Drivers\SklHdaudBus\sklhdaudbus.cat',
+    'Drivers\CsAudioIntcsof\csaudiointcsof.cat',
+    'Drivers\rt5682\rt5682.cat',
+    'Drivers\max98357a\max98357a.cat'
+)
+$driverBinaries = @(
+    'Drivers\SklHdaudBus\SklHdaudBus.sys',
+    'Drivers\CsAudioIntcsof\CsAudioIntcsof.sys',
+    'Drivers\rt5682\rt5682.sys',
+    'Drivers\max98357a\max98357a.sys'
+)
+$programs = @(
+    'Switcher\csaudioendpointswitcher.exe',
+    'Switcher\csaudiojackprompt.exe'
+)
 
 Write-Host "Chromebook Audio for Windows  $version" -ForegroundColor Green
 
@@ -76,109 +102,136 @@ if (-not $ok) {
     if (-not $Force) {
         Fail ("This package is for the Google pujjoteen Chromebook (Intel Alder Lake-N with an`n" +
               "ALC5682I headset codec and a MAX98360A speaker amp). This laptop does not have`n" +
-              "that combination, so nothing was installed.")
+              "that combination, so nothing was installed.") 3
     }
     Write-Warning 'Hardware check failed - continuing because -Force was given.'
 }
 
-# ------------------------------------------------------------------ test signing
-Step 'Checking driver signing mode'
-$bootOptions = Get-ItemPropertyValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
-                                     -Name 'SystemStartOptions' -ErrorAction SilentlyContinue
-$testSigningActive = (($bootOptions -split '\s+') -contains 'TESTSIGNING')
-if (-not $testSigningActive) {
-    Write-Host 'These drivers are test-signed, so Windows must be in Test Mode.' -ForegroundColor Yellow
-    $a = Read-Host 'Turn Test Mode on now? (Y/N)'
-    if ($a -match '^[Yy]') {
-        bcdedit /set testsigning on | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            Fail ("Could not turn on Test Mode. Secure Boot is probably enabled - turn it off in the`n" +
-                  "firmware setup (UEFI) and run this installer again.")
+# ------------------------------------------------------------------ signing mode
+Step 'Checking driver signatures'
+$catalogSignatures = @{}
+foreach ($rel in $driverCatalogs) { $catalogSignatures[$rel] = Get-PackageSignature $rel }
+$msSigned = @($catalogSignatures.Values | Where-Object {
+    $_.SignerCertificate -and $_.SignerCertificate.Subject -match [regex]::Escape($msPublisher)
+}).Count -eq $driverCatalogs.Count
+
+if ($msSigned) {
+    # Production package: Windows trusts the Microsoft signature on its own.
+    foreach ($rel in $driverCatalogs + $driverBinaries) { Test-ValidSignature (Get-PackageSignature $rel) $rel }
+    # The two user-mode programs are signed with the publisher's own
+    # certificate (EV for public releases). They do not need Microsoft's
+    # signature to run, so only warn if Windows cannot verify them.
+    foreach ($rel in $programs) {
+        $sig = Get-PackageSignature $rel
+        if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            Write-Warning "$rel signature not verified by Windows ($($sig.Status)); continuing."
         }
-        Fail 'Test Mode is now on. REBOOT, then run Install.cmd again.'
     }
-    Fail 'Installation stopped: Test Mode is required.'
-}
-Write-Host '  Test Mode is on.'
+    Write-Host "  Microsoft-signed drivers: Secure Boot compatible, no Test Mode needed."
+} else {
+    # ---------------------------------------------------------------- test signing
+    Write-Host '  Test-signed drivers (local build).'
+    $bootOptions = Get-ItemPropertyValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
+                                         -Name 'SystemStartOptions' -ErrorAction SilentlyContinue
+    $testSigningActive = (($bootOptions -split '\s+') -contains 'TESTSIGNING')
+    if (-not $testSigningActive) {
+        if ($Unattended) {
+            Fail ('These drivers are test-signed, so Windows must be in Test Mode (Secure Boot off). ' +
+                  'Test Mode is currently off.') 2
+        }
+        Write-Host 'These drivers are test-signed, so Windows must be in Test Mode.' -ForegroundColor Yellow
+        $a = Read-Host 'Turn Test Mode on now? (Y/N)'
+        if ($a -match '^[Yy]') {
+            bcdedit /set testsigning on | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Fail ("Could not turn on Test Mode. Secure Boot is probably enabled - turn it off in the`n" +
+                      "firmware setup (UEFI) and run this installer again.")
+            }
+            Fail 'Test Mode is now on. REBOOT, then run Install.cmd again.'
+        }
+        Fail 'Installation stopped: Test Mode is required.' 2
+    }
+    Write-Host '  Test Mode is on.'
 
-# ------------------------------------------------------------------ certificate
-Step 'Trusting the driver certificate'
-$cer = Join-Path $here 'ChromebookAudio.cer'
-if (-not (Test-Path -LiteralPath $cer -PathType Leaf)) {
-    Fail "The package signing certificate is missing: $cer"
-}
+    # -------------------------------------------------------------- certificate
+    Step 'Trusting the driver certificate'
+    $cer = Join-Path $here 'ChromebookAudio.cer'
+    if (-not (Test-Path -LiteralPath $cer -PathType Leaf)) {
+        Fail "The package signing certificate is missing: $cer"
+    }
 
-$certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cer)
-$certificateThumbprint = Normalize-Thumbprint $certificate.Thumbprint
-if ((Get-Date) -lt $certificate.NotBefore -or (Get-Date) -gt $certificate.NotAfter) {
-    Fail "The package signing certificate is not currently valid ($($certificate.NotBefore) through $($certificate.NotAfter))."
-}
-if (-not (Test-CodeSigningEku $certificate)) {
-    Fail 'The package certificate is not valid for code signing.'
-}
+    $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cer)
+    $certificateThumbprint = Normalize-Thumbprint $certificate.Thumbprint
+    if ((Get-Date) -lt $certificate.NotBefore -or (Get-Date) -gt $certificate.NotAfter) {
+        Fail "The package signing certificate is not currently valid ($($certificate.NotBefore) through $($certificate.NotAfter))."
+    }
+    if (-not (Test-CodeSigningEku $certificate)) {
+        Fail 'The package certificate is not valid for code signing.'
+    }
 
-# A self-signed test certificate must be trusted as both its own root and its publisher.
-if ($certificate.Subject -eq $certificate.Issuer) {
-    Add-CertificateToStore 'Root' $cer
-}
-Add-CertificateToStore 'TrustedPublisher' $cer
+    # Check every file is signed by the package certificate before trusting it.
+    foreach ($rel in $driverCatalogs + $driverBinaries + $programs) {
+        $sig = Get-PackageSignature $rel
+        if (-not $sig.SignerCertificate -or
+            (Normalize-Thumbprint $sig.SignerCertificate.Thumbprint) -ne $certificateThumbprint) {
+            Fail ("The package contains a file not signed by its certificate.`n" +
+                  "Expected: $certificateThumbprint`nFile:     $rel")
+        }
+    }
 
-$publisher = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPublisher\$certificateThumbprint" -ErrorAction SilentlyContinue
-if (-not $publisher) {
-    Fail "The driver certificate was not found in LocalMachine\TrustedPublisher after import."
-}
-if ($certificate.Subject -eq $certificate.Issuer) {
-    $root = Get-Item -LiteralPath "Cert:\LocalMachine\Root\$certificateThumbprint" -ErrorAction SilentlyContinue
-    if (-not $root) { Fail 'The self-signed driver certificate was not found in LocalMachine\Root after import.' }
-}
+    # A self-signed test certificate must be trusted as both its own root and its publisher.
+    if ($certificate.Subject -eq $certificate.Issuer) {
+        Add-CertificateToStore 'Root' $cer
+    }
+    Add-CertificateToStore 'TrustedPublisher' $cer
 
-foreach ($signedFile in @(
-    'Drivers\SklHdaudBus\SklHdaudBus.sys',
-    'Drivers\SklHdaudBus\sklhdaudbus.cat',
-    'Drivers\CsAudioIntcsof\CsAudioIntcsof.sys',
-    'Drivers\CsAudioIntcsof\csaudiointcsof.cat',
-    'Drivers\rt5682\rt5682.sys',
-    'Drivers\rt5682\rt5682.cat',
-    'Drivers\max98357a\max98357a.sys',
-    'Drivers\max98357a\max98357a.cat',
-    'Switcher\csaudioendpointswitcher.exe',
-    'Switcher\csaudiojackprompt.exe'
-)) {
-    Test-PackageSignature (Join-Path $here $signedFile) $certificateThumbprint
-}
-Write-Host "  trusted and verified ($certificateThumbprint)"
+    $publisher = Get-Item -LiteralPath "Cert:\LocalMachine\TrustedPublisher\$certificateThumbprint" -ErrorAction SilentlyContinue
+    if (-not $publisher) {
+        Fail "The driver certificate was not found in LocalMachine\TrustedPublisher after import."
+    }
+    if ($certificate.Subject -eq $certificate.Issuer) {
+        $root = Get-Item -LiteralPath "Cert:\LocalMachine\Root\$certificateThumbprint" -ErrorAction SilentlyContinue
+        if (-not $root) { Fail 'The self-signed driver certificate was not found in LocalMachine\Root after import.' }
+    }
 
-# ------------------------------------------------------------------ code integrity policy
-# These open-source drivers are test-signed and can otherwise be rejected by
-# the Microsoft vulnerable-driver blocklist before PnP gets a chance to load
-# them. Do this only after the complete package has passed signature checks.
-Step 'Configuring Windows driver compatibility'
-$ciConfigPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Config'
-New-Item -Path $ciConfigPath -Force | Out-Null
+    foreach ($rel in $driverCatalogs + $driverBinaries + $programs) {
+        Test-ValidSignature (Get-PackageSignature $rel) $rel
+    }
+    Write-Host "  trusted and verified ($certificateThumbprint)"
+
+    # ------------------------------------------------------ code integrity policy
+    # Upstream cros-sofaudio disables the Microsoft vulnerable-driver
+    # blocklist for its test-signed drivers. Only for test-signed packages,
+    # and only after the complete package has passed signature checks.
+    Step 'Configuring Windows driver compatibility'
+    $ciConfigPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Config'
+    New-Item -Path $ciConfigPath -Force | Out-Null
+    New-Item -Path $regRoot -Force | Out-Null
+
+    $backupCaptured = (Get-ItemProperty -Path $regRoot -Name 'BlocklistBackupCaptured' -ErrorAction SilentlyContinue).BlocklistBackupCaptured
+    if ($backupCaptured -ne 1) {
+        $ciConfigKey = Get-Item -Path $ciConfigPath
+        $previousBlocklistValue = $ciConfigKey.GetValue('VulnerableDriverBlocklistEnable', $null)
+        $blocklistValueWasPresent = if ($null -eq $previousBlocklistValue) { 0 } else { 1 }
+        if ($null -eq $previousBlocklistValue) { $previousBlocklistValue = 1 }
+
+        New-ItemProperty -Path $regRoot -Name 'BlocklistValueWasPresent' -PropertyType DWord -Value $blocklistValueWasPresent -Force | Out-Null
+        New-ItemProperty -Path $regRoot -Name 'PreviousVulnerableDriverBlocklistEnable' -PropertyType DWord -Value ([int]$previousBlocklistValue) -Force | Out-Null
+        New-ItemProperty -Path $regRoot -Name 'BlocklistBackupCaptured' -PropertyType DWord -Value 1 -Force | Out-Null
+    }
+
+    New-ItemProperty -Path $ciConfigPath `
+                     -Name 'VulnerableDriverBlocklistEnable' `
+                     -PropertyType DWord `
+                     -Value 0 `
+                     -Force | Out-Null
+    $blocklistValue = Get-ItemPropertyValue -Path $ciConfigPath -Name 'VulnerableDriverBlocklistEnable'
+    if ($blocklistValue -ne 0) {
+        Fail 'Windows did not accept the VulnerableDriverBlocklistEnable=0 compatibility setting.'
+    }
+    Write-Warning 'Microsoft Vulnerable Driver Blocklist disabled for these test-signed drivers. A reboot is required.'
+}
 New-Item -Path $regRoot -Force | Out-Null
-
-$backupCaptured = (Get-ItemProperty -Path $regRoot -Name 'BlocklistBackupCaptured' -ErrorAction SilentlyContinue).BlocklistBackupCaptured
-if ($backupCaptured -ne 1) {
-    $ciConfigKey = Get-Item -Path $ciConfigPath
-    $previousBlocklistValue = $ciConfigKey.GetValue('VulnerableDriverBlocklistEnable', $null)
-    $blocklistValueWasPresent = if ($null -eq $previousBlocklistValue) { 0 } else { 1 }
-    if ($null -eq $previousBlocklistValue) { $previousBlocklistValue = 1 }
-
-    New-ItemProperty -Path $regRoot -Name 'BlocklistValueWasPresent' -PropertyType DWord -Value $blocklistValueWasPresent -Force | Out-Null
-    New-ItemProperty -Path $regRoot -Name 'PreviousVulnerableDriverBlocklistEnable' -PropertyType DWord -Value ([int]$previousBlocklistValue) -Force | Out-Null
-    New-ItemProperty -Path $regRoot -Name 'BlocklistBackupCaptured' -PropertyType DWord -Value 1 -Force | Out-Null
-}
-
-New-ItemProperty -Path $ciConfigPath `
-                 -Name 'VulnerableDriverBlocklistEnable' `
-                 -PropertyType DWord `
-                 -Value 0 `
-                 -Force | Out-Null
-$blocklistValue = Get-ItemPropertyValue -Path $ciConfigPath -Name 'VulnerableDriverBlocklistEnable'
-if ($blocklistValue -ne 0) {
-    Fail 'Windows did not accept the VulnerableDriverBlocklistEnable=0 compatibility setting.'
-}
-Write-Warning 'Microsoft Vulnerable Driver Blocklist disabled for these test-signed drivers. A reboot is required.'
 
 # Keep an older switcher from reacting to PnP endpoint churn while its driver
 # packages and executable are being replaced.

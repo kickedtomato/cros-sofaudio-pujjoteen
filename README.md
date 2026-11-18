@@ -19,6 +19,38 @@
 > * `build.cmd` builds with VS 2026 + WDK 10.0.28000 (runs `inf2cat` itself)
 >   and signs with `SIGN_CERT_SHA1` or the local "CN=audiodriver test signing"
 >   certificate.
+> * `csaudiojackprompt.exe` asks what was plugged into the 3.5 mm jack
+>   (headphones / line out, headset, microphone only).
+> * `package.cmd` also builds an NSIS setup
+>   (`dist\cros-sofaudio-pujjoteen-setup-<version>.exe`).
+>
+> ### Installing
+>
+> Run `cros-sofaudio-pujjoteen-setup-<version>.exe` and restart. It installs
+> the drivers, the speaker/headphone switcher service and the plug-in dialog,
+> and adds an entry to *Settings → Apps* for uninstalling.
+>
+> **Test-signed builds need Windows Test Mode, which needs Secure Boot off.**
+> The setup offers to turn Test Mode on. Kernel drivers only load with Secure
+> Boot on when Microsoft has signed them; there is no way around that with a
+> self-signed certificate.
+>
+> ### Releasing for Secure Boot (Microsoft attestation signing)
+>
+> 1. Get an EV code-signing certificate and a Windows Hardware Dev Center
+>    (Partner Center) account.
+> 2. Build with the EV certificate so the programs and setup carry it:
+>    `set SIGN_CERT_SHA1=<EV thumbprint>` then `build.cmd`.
+> 3. `powershell -File build-tools\Make-AttestationCab.ps1 -Thumbprint <EV thumbprint>`
+>    and submit `dist\attestation\cros-sofaudio-pujjoteen-drivers.cab`
+>    (Hardware → Submit new hardware → attestation, Windows 10/11 x64).
+> 4. Download the signed result, then
+>    `powershell -File build-tools\Import-AttestationSigned.ps1 -SignedPackage <download.zip>`
+>    and `package.cmd`.
+>
+> The setup detects Microsoft-signed drivers and then skips Test Mode, the
+> certificate import and the vulnerable-driver-blocklist change. This path is
+> scripted but has not been run (no EV certificate yet).
 >
 > The rest of this README describes upstream (volmar).
 

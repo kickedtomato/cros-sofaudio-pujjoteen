@@ -57,6 +57,8 @@ if exist "!FULL_LOG!" del /f /q "!FULL_LOG!"
 
 :: Never reuse a catalog generated for older INF or binary contents.
 for %%d in (%PACKAGES%) do if exist "%OUT_DIR%\%%d\*.cat" del /f /q "%OUT_DIR%\%%d\*.cat"
+:: A rebuild replaces any Microsoft-signed drivers with test-signed ones.
+if exist "%OUT_DIR%\MICROSOFT_SIGNED" del /f /q "%OUT_DIR%\MICROSOFT_SIGNED"
 
 :: ---------------------------------------------------------------- build
 echo [INFO] Building ChromebookAudioDrivers.sln (Release ^| x64)...

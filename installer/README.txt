@@ -10,8 +10,13 @@ Supported laptop
   can switch it on (Secure Boot must be off for that).
 
 Install
+  Easiest: run cros-sofaudio-pujjoteen-setup-<version>.exe and restart.
+  Uninstall it from Settings -> Apps. From this folder instead:
   1. Double-click Install.cmd (it asks for administrator rights).
   2. Reboot.
+  Test-signed builds need Test Mode (Secure Boot off). Builds whose drivers
+  are signed by Microsoft (attestation) work with Secure Boot on and skip
+  Test Mode, the certificate import and the blocklist change.
   The installer verifies every driver signature, disables the Microsoft
   Vulnerable Driver Blocklist for these test-signed drivers, removes the
   earlier bring-up DSP driver (sofaudio.inf) if present, and removes

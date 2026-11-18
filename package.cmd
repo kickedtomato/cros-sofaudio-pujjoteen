@@ -1,6 +1,17 @@
 @echo off
 setlocal EnableDelayedExpansion
 
+:: Packages the signed build into
+::   dist\cros-sofaudio-<version>\                folder (scripts + drivers)
+::   cros-sofaudio-<version>.zip                   same, zipped
+::   dist\cros-sofaudio-pujjoteen-setup-<version>.exe   NSIS setup (if NSIS is installed)
+::
+:: Test-signed builds (build.cmd) need Test Mode on the target. After
+:: attestation signing (build-tools\Make-AttestationCab.ps1, then
+:: build-tools\Import-AttestationSigned.ps1) x64\Release\MICROSOFT_SIGNED
+:: exists, the driver catalogs are checked for Microsoft's signature, and
+:: the setup works with Secure Boot on.
+
 set "ROOT_DIR=%~dp0"
 set "OUT_DIR=%ROOT_DIR%x64\Release"
 set "VERSION=v0.1.0-pujjoteen"
@@ -9,6 +20,7 @@ set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 max98357a"
 
 set "DIST_DIR=%ROOT_DIR%dist\cros-sofaudio-%VERSION%"
 set "ZIP_FILE=%ROOT_DIR%cros-sofaudio-%VERSION%.zip"
+set "SETUP_FILE=%ROOT_DIR%dist\cros-sofaudio-pujjoteen-setup-%VERSION%.exe"
 
 echo ====================================================================
 echo  Chromebook SOF Audio Drivers (pujjoteen) - Packaging %VERSION%
@@ -30,15 +42,28 @@ if not exist "%CERT_FILE%" (
     exit /b 1
 )
 
-set "SIGN_PATHS="
+set "DRIVER_PATHS="
 for %%d in (%PACKAGES%) do (
-    for %%f in ("%OUT_DIR%\%%d\*.sys" "%OUT_DIR%\%%d\*.cat") do set "SIGN_PATHS=!SIGN_PATHS!%%~ff;"
+    for %%f in ("%OUT_DIR%\%%d\*.sys" "%OUT_DIR%\%%d\*.cat") do set "DRIVER_PATHS=!DRIVER_PATHS!%%~ff;"
 )
-set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe;%OUT_DIR%\csaudiojackprompt.exe"
+set "PROGRAM_PATHS=%OUT_DIR%\csaudioendpointswitcher.exe;%OUT_DIR%\csaudiojackprompt.exe"
 
-echo [INFO] Verifying package signatures and signer certificate...
+if exist "%OUT_DIR%\MICROSOFT_SIGNED" (
+    echo [INFO] Verifying Microsoft attestation signatures on the drivers...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Test-MicrosoftSigned.ps1" -Paths "!DRIVER_PATHS!"
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] The drivers are not all Microsoft-signed.
+        exit /b 1
+    )
+    set "VERIFY_PATHS=!PROGRAM_PATHS!"
+) else (
+    echo [INFO] Test-signed drivers: the setup will need Test Mode on the target.
+    set "VERIFY_PATHS=!DRIVER_PATHS!!PROGRAM_PATHS!"
+)
+
+echo [INFO] Verifying signatures against %CERT_FILE%...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Test-DriverSignatures.ps1" ^
-    -CertificatePath "%CERT_FILE%" -Paths "!SIGN_PATHS!"
+    -CertificatePath "%CERT_FILE%" -Paths "!VERIFY_PATHS!"
 if !ERRORLEVEL! neq 0 (
     echo [ERROR] Packaging stopped because the certificate does not match the signed binaries.
     exit /b 1
@@ -53,7 +78,7 @@ for %%d in (%PACKAGES%) do (
     xcopy /y /e "%OUT_DIR%\%%d\*" "%DIST_DIR%\Drivers\%%d\" >nul
 )
 
-echo [INFO] Copying endpoint switcher service...
+echo [INFO] Copying endpoint switcher service and plug-in dialog...
 mkdir "%DIST_DIR%\Switcher"
 copy /y "%OUT_DIR%\csaudioendpointswitcher.exe" "%DIST_DIR%\Switcher\" >nul
 copy /y "%OUT_DIR%\csaudiojackprompt.exe" "%DIST_DIR%\Switcher\" >nul
@@ -77,10 +102,38 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: ---------------------------------------------------------------- NSIS setup
+set "MAKENSIS="
+for %%p in ("%ProgramFiles(x86)%\NSIS\makensis.exe" "%ProgramFiles%\NSIS\makensis.exe") do if exist "%%~p" set "MAKENSIS=%%~p"
+if not defined MAKENSIS (
+    echo [WARN] NSIS ^(makensis.exe^) not found; skipping the setup .exe.
+    goto :Done
+)
+
+set "VERSION_NUM="
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "if ('%VERSION%' -match '(\d+)\.(\d+)\.(\d+)') { '{0}.{1}.{2}.0' -f $Matches[1],$Matches[2],$Matches[3] } else { '0.0.0.0' }"`) do set "VERSION_NUM=%%v"
+
+:: Sign the setup with the same certificate as the programs.
+set "SIGN_ARG="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Find-SignTool.ps1"`) do set "SIGNTOOL=%%i"
+if not defined SIGN_CERT_PFX_PATH if not defined SIGN_CERT_SHA1 (
+    for /f "usebackq delims=" %%t in (`powershell -NoProfile -Command "(New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('%CERT_FILE%')).Thumbprint"`) do set "SIGN_CERT_SHA1=%%t"
+)
+if defined SIGNTOOL set "SIGN_ARG=/DSIGN_SCRIPT=%ROOT_DIR%build-tools\sign-file.cmd"
+
+echo [INFO] Building NSIS setup: %SETUP_FILE%...
+"%MAKENSIS%" /V2 /DVERSION=%VERSION% /DVERSION_NUM=%VERSION_NUM% "/DDISTDIR=%DIST_DIR%" "/DOUTFILE=%SETUP_FILE%" %SIGN_ARG% "%ROOT_DIR%installer\nsis\cros-sofaudio-pujjoteen.nsi"
+if errorlevel 1 (
+    echo [ERROR] makensis failed.
+    exit /b 1
+)
+
+:Done
 echo.
 echo ====================================================================
 echo  [SUCCESS] Release package created.
 echo  Directory: %DIST_DIR%
 echo  Archive:   %ZIP_FILE%
+if exist "%SETUP_FILE%" echo  Setup:     %SETUP_FILE%
 echo ====================================================================
 endlocal
