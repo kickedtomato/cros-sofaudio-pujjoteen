@@ -74,11 +74,11 @@ VIAddVersionKey "LegalCopyright"  "MIT / Apache-2.0 / BSD-3-Clause; see LICENSE 
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "These drivers need 64-bit Windows 10 or 11."
+    MessageBox MB_ICONSTOP "These drivers need 64-bit Windows 10 or 11." /SD IDOK
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_ICONSTOP "These drivers need Windows 10 or 11."
+    MessageBox MB_ICONSTOP "These drivers need Windows 10 or 11." /SD IDOK
     Abort
   ${EndIf}
   SetRegView 64
@@ -99,7 +99,7 @@ Section "Install"
 
   ${If} $0 == 2
     ; Test-signed package and Windows is not in Test Mode.
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION "This build of the drivers is test-signed, so Windows must run in Test Mode, and Test Mode needs Secure Boot turned off in the firmware settings.$\r$\n$\r$\n(Releases signed by Microsoft do not need this.)$\r$\n$\r$\nTurn on Test Mode now? You will need to restart and run this setup again." IDYES enable_testmode
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "This build of the drivers is test-signed, so Windows must run in Test Mode, and Test Mode needs Secure Boot turned off in the firmware settings.$\r$\n$\r$\n(Releases signed by Microsoft do not need this.)$\r$\n$\r$\nTurn on Test Mode now? You will need to restart and run this setup again." /SD IDNO IDYES enable_testmode
     RMDir /r "$INSTDIR\Package"
     Abort "Installation stopped: Test Mode is required for test-signed drivers."
   enable_testmode:
@@ -107,18 +107,18 @@ Section "Install"
     Pop $1
     RMDir /r "$INSTDIR\Package"
     ${If} $1 != 0
-      MessageBox MB_ICONSTOP "Windows refused to turn on Test Mode. Secure Boot is probably on: turn it off in the firmware (UEFI) setup, then run this setup again."
+      MessageBox MB_ICONSTOP "Windows refused to turn on Test Mode. Secure Boot is probably on: turn it off in the firmware (UEFI) setup, then run this setup again." /SD IDOK
       Abort "Could not turn on Test Mode."
     ${EndIf}
-    MessageBox MB_ICONINFORMATION "Test Mode is now on. Restart the laptop, then run this setup again."
+    MessageBox MB_ICONINFORMATION "Test Mode is now on. Restart the laptop, then run this setup again." /SD IDOK
     SetRebootFlag true
     Abort "Restart, then run setup again."
   ${ElseIf} $0 == 3
     RMDir /r "$INSTDIR\Package"
-    MessageBox MB_ICONSTOP "This laptop is not a pujjoteen Chromebook (Alder Lake-N with a MAX98360A amp and an ALC5682I codec). Nothing was installed."
+    MessageBox MB_ICONSTOP "This laptop is not a pujjoteen Chromebook (Alder Lake-N with a MAX98360A amp and an ALC5682I codec). Nothing was installed." /SD IDOK
     Abort "Unsupported hardware."
   ${ElseIf} $0 != 0
-    MessageBox MB_ICONSTOP "The driver installation failed (code $0). See the details above; Collect-Logs.cmd in $INSTDIR\Package gathers diagnostics."
+    MessageBox MB_ICONSTOP "The driver installation failed (code $0). See the details above; Collect-Logs.cmd in $INSTDIR\Package gathers diagnostics." /SD IDOK
     Abort "Driver installation failed."
   ${EndIf}
 
