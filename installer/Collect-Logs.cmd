@@ -1,6 +1,5 @@
 @echo off
-rem Saves a diagnostic log (driver state, DSP, codec, amps, switcher) next to this file
-rem and into Desktop\acer volmar if that folder exists.
+rem Saves a diagnostic log (DSP boot, pipelines, drivers, switcher) next to this file.
 set "LOG=%~dp0audio-log.txt"
 (
   echo == DSP boot ==
@@ -12,19 +11,8 @@ set "LOG=%~dp0audio-log.txt"
   echo == Data-flow snapshots ==
   reg query HKLM\SOFTWARE\CrosSofAudio\DspDiag
   echo.
-  echo == Speaker amps ==
-  reg query HKLM\SOFTWARE\CrosSofAudio\AmpLeft
-  reg query HKLM\SOFTWARE\CrosSofAudio\AmpRight
-  reg query HKLM\SOFTWARE\CrosSofAudio\Amp0
-  reg query HKLM\SOFTWARE\CrosSofAudio\Amp1
-  echo.
-  echo == Headphone codec / jack ==
-  reg query HKLM\SOFTWARE\CrosSofAudio\Codec
-  echo.
   echo == Settings ==
   reg query HKLM\SOFTWARE\CrosSofAudio /v *Atten*
-  reg query HKLM\SOFTWARE\CrosSofAudio /v SpeakerLimiterThresholdDb
-  reg query HKLM\SOFTWARE\CrosSofAudio /v JackActiveLow
   reg query HKLM\SYSTEM\CurrentControlSet\Control\CI\Config /v VulnerableDriverBlocklistEnable
   echo.
   echo == Switcher service ==
@@ -32,11 +20,12 @@ set "LOG=%~dp0audio-log.txt"
   powershell -NoProfile -Command "if (Test-Path \"$env:ProgramData\CrosSofAudio\switcher.log\") { Get-Content \"$env:ProgramData\CrosSofAudio\switcher.log\" -Tail 40 }"
   echo.
   echo == Drivers ==
-  powershell -NoProfile -Command "Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.InfName -and $_.DeviceName -match 'SOF Audio|Nuvoton|MAX98373|HD Audio' } | Format-List DeviceName,DriverVersion,InfName"
+  powershell -NoProfile -Command "Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceID -match 'CSAUDIO\\ADSP|DEV_54C8|10EC5682|MX98360A' } | Format-List DeviceName,DeviceID,DriverVersion,DriverProviderName,InfName"
+  echo == Device status ==
+  powershell -NoProfile -Command "Get-PnpDevice | Where-Object { $_.InstanceId -match 'CSAUDIO\\ADSP|DEV_54C8|10EC5682|MX98360A' } | Format-Table -AutoSize Status,FriendlyName,InstanceId | Out-String -Width 300"
   echo == Audio endpoints ==
   powershell -NoProfile -Command "Get-PnpDevice | Where-Object { $_.Class -eq 'AudioEndpoint' -and $_.FriendlyName -match 'Chromebook' } | Format-Table -AutoSize Status,FriendlyName | Out-String -Width 300"
 ) > "%LOG%" 2>&1
-if exist "%USERPROFILE%\Desktop\acer volmar" copy /y "%LOG%" "%USERPROFILE%\Desktop\acer volmar\audio-log.txt" >nul
 type "%LOG%"
 echo.
 echo Saved to %LOG%

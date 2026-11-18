@@ -1,46 +1,21 @@
 /*
- * csaudio_codec.h — Shared Audio Bus & Sidecar Interface Definitions
+ * csaudio_codec.h — Shared definitions between the SOF DSP driver, the
+ * codec drivers and the endpoint switcher (pujjoteen build).
  *
- * Reverse engineered from ChromeOS Intel Sound Open Firmware (SOF) audio architecture
- * and designed for Windows 11 KMDF Audio Driver Interoperability.
- *
- * Compatible with CoolStar's CSAudio bus (csaudiointcsof / csaudiosstavs / sklhdaudbus)
- * and standalone Windows PortCls / WaveRT audio miniport drivers.
+ * The DSP driver talks to the codec drivers only through CoolStar's
+ * \Callback\CsAudioCallbackAPI kernel callback object. On pujjoteen the
+ * codec drivers are CoolStar's open-source rt5682.sys (ALC5682I-VD headset
+ * codec) and max98357a.sys (MAX98360A speaker amp); CsAudioArg below must
+ * keep the same layout as their copies (rt5682.h / max98357a driver.h).
  *
  * Copyright (c) 2026. Licensed under the MIT License.
  */
 
 #pragma once
 
-#include <initguid.h>
-
 /* =========================================================================
- * Device Interface GUIDs
+ * \Callback\CsAudioCallbackAPI arguments (CoolStar layout)
  * ========================================================================= */
-
-/* {71B1AA20-1D88-4A97-94E5-B4C254DF5741} */
-DEFINE_GUID(GUID_DEVINTERFACE_CSAUDIO_CODEC,
-    0x71b1aa20, 0x1d88, 0x4a97, 0x94, 0xe5, 0xb4, 0xc2, 0x54, 0xdf, 0x57, 0x41);
-
-/* {A89746A1-9837-4D21-B457-3C98373E0001} */
-DEFINE_GUID(GUID_DEVINTERFACE_MAX98373_AMP,
-    0xa89746a1, 0x9837, 0x4d21, 0xb4, 0x57, 0x3c, 0x98, 0x37, 0x3e, 0x00, 0x01);
-
-/* {88250001-8825-4B88-A882-8825NAU88L25} */
-DEFINE_GUID(GUID_DEVINTERFACE_NAU8825_CODEC,
-    0x88250001, 0x8825, 0x4b88, 0xa8, 0x82, 0x88, 0x25, 0xba, 0x88, 0x25, 0x01);
-
-/* =========================================================================
- * Codec Types & Endpoints
- * ========================================================================= */
-
-typedef enum _CSAUDIO_CODEC_TYPE {
-    CSAUDIO_CODEC_TYPE_UNKNOWN   = 0,
-    CSAUDIO_CODEC_TYPE_SPEAKER   = 1,   /* Maxim MAX98373 Smart Amp */
-    CSAUDIO_CODEC_TYPE_HEADPHONE = 2,   /* Nuvoton NAU88L25 DAC */
-    CSAUDIO_CODEC_TYPE_HEADSET   = 3,   /* NAU88L25 DAC + Mic ADC + Jack Detect */
-    CSAUDIO_CODEC_TYPE_DMIC      = 4,   /* Digital Mic Array */
-} CSAUDIO_CODEC_TYPE;
 
 typedef enum {
     CSAudioEndpointTypeDSP        = 0,
@@ -54,7 +29,8 @@ typedef enum {
     CSAudioEndpointRegister       = 0,
     CSAudioEndpointStart          = 1,
     CSAudioEndpointStop           = 2,
-    CSAudioEndpointOverrideFormat = 3
+    CSAudioEndpointOverrideFormat = 3,
+    CSAudioEndpointI2SParameters  = 4   /* DSP -> codec: link clocking */
 } CSAudioEndpointRequest;
 
 typedef struct CSAUDIOFORMATOVERRIDE {
@@ -65,6 +41,24 @@ typedef struct CSAUDIOFORMATOVERRIDE {
     BOOLEAN force32BitOutputContainer;
 } CsAudioFormatOverride;
 
+/*
+ * I2S link clocking, sent with CSAudioEndpointI2SParameters. rt5682.sys
+ * (version >= 1) programs PLL1 from mclk to 512 * frequency, sets its
+ * SYSCLK and uses valid_bits as the I2S/TDM data length (16/20/24/32).
+ */
+typedef struct CSAUDIOI2SPARAMS {
+    UINT32 version;         /* 1 */
+
+    UINT32 mclk;
+    UINT32 bclk_rate;
+    UINT32 frequency;
+    UINT32 tdm_slots;
+    UINT32 tdm_slot_width;
+    UINT32 rx_slots;
+    UINT32 tx_slots;
+    UINT32 valid_bits;      /* end of version 1 */
+} CsAudioI2SParameters;
+
 #pragma warning(push)
 #pragma warning(disable:4201)
 typedef struct CSAUDIOARG {
@@ -73,101 +67,34 @@ typedef struct CSAUDIOARG {
     CSAudioEndpointRequest endpointRequest;
     union {
         CsAudioFormatOverride formatOverride;
+        CsAudioI2SParameters i2sParameters;
     };
 } CsAudioArg, *PCsAudioArg;
 #pragma warning(pop)
 
-typedef enum _CSAUDIO_ENDPOINT_TYPE {
-    CSAUDIO_ENDPOINT_SPEAKER     = 0x01,
-    CSAUDIO_ENDPOINT_HEADPHONE   = 0x02,
-    CSAUDIO_ENDPOINT_HEADSET_MIC = 0x04,
-    CSAUDIO_ENDPOINT_INTERNAL_MIC= 0x08,
-} CSAUDIO_ENDPOINT_TYPE;
-
 /* =========================================================================
- * Jack Detection Flags
+ * Headset jack (rt5682.sys HID vendor collection)
+ *
+ * rt5682.sys exposes a HID device (VID 0x10EC, PID 0x5682). Its vendor
+ * collection (usage page 0xFF00) sends input report
+ *     { CSAUDIO_RT5682_REPORTID_JACK, CSAUDIO_RT5682_CONTROL_JACK_TYPE, type }
+ * on every jack change and again whenever output report
+ *     { CSAUDIO_RT5682_REPORTID_JACK, 0 }
+ * is written. "type" uses the Linux SND_JACK_* bits below.
  * ========================================================================= */
 
+#define CSAUDIO_RT5682_HID_VID            0x10EC
+#define CSAUDIO_RT5682_HID_PID            0x5682
+#define CSAUDIO_RT5682_HID_USAGE_PAGE     0xFF00
+#define CSAUDIO_RT5682_REPORTID_JACK      0x02
+#define CSAUDIO_RT5682_CONTROL_JACK_TYPE  0x01
+#define CSAUDIO_RT5682_JACK_HEADPHONE     0x01   /* SND_JACK_HEADPHONE */
+#define CSAUDIO_RT5682_JACK_MICROPHONE    0x02   /* SND_JACK_MICROPHONE */
+
+/* Jack routing state used by the endpoint switcher. */
 typedef enum _CSAUDIO_JACK_STATE {
     CSAUDIO_JACK_UNPLUGGED        = 0x00,
     CSAUDIO_JACK_HEADPHONES_3POLE = 0x01,  /* Standard TRS stereo headphones (no mic) */
     CSAUDIO_JACK_HEADSET_4POLE    = 0x02,  /* TRRS headset with microphone (CTIA/OMTP) */
     CSAUDIO_JACK_LINE_OUT         = 0x04,  /* High impedance line output */
-    CSAUDIO_JACK_BUTTON_PRESSED   = 0x10,  /* Hook switch / play-pause */
-    CSAUDIO_JACK_VOL_UP           = 0x20,  /* Headset volume up */
-    CSAUDIO_JACK_VOL_DOWN         = 0x40,  /* Headset volume down */
 } CSAUDIO_JACK_STATE, *PCSAUDIO_JACK_STATE;
-
-/* =========================================================================
- * Codec Audio Stream Configuration
- * ========================================================================= */
-
-typedef struct _CSAUDIO_STREAM_CONFIG {
-    UINT32 SampleRate;       /* 48000, 44100, 96000 */
-    UINT8  BitsPerSample;    /* 16, 24, 32 */
-    UINT8  Channels;         /* 1 (mono), 2 (stereo) */
-    UINT8  SlotWidth;        /* 16, 24, 32 */
-    UINT8  RxSlot;           /* TDM slot index for playback */
-    UINT8  TxSlot;           /* TDM slot index for feedback/capture */
-    UINT8  EndpointType;     /* CSAudioEndpointType; playback or capture path */
-} CSAUDIO_STREAM_CONFIG, *PCSAUDIO_STREAM_CONFIG;
-
-/* =========================================================================
- * IOCTL Definitions
- * ========================================================================= */
-
-#define FILE_DEVICE_CSAUDIO  0x8825
-
-#define IOCTL_CSAUDIO_REGISTER_CODEC \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_UNREGISTER_CODEC \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_STREAM_START \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_STREAM_STOP \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_SET_VOLUME \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_GET_VOLUME \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_SET_MUTE \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_GET_JACK_STATE \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_REGISTER_JACK_NOTIFICATION \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_READ_REG \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x810, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CSAUDIO_WRITE_REG \
-    CTL_CODE(FILE_DEVICE_CSAUDIO, 0x811, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-/* =========================================================================
- * IOCTL Request / Response Payloads
- * ========================================================================= */
-
-typedef struct _CSAUDIO_REGISTER_PARAMS {
-    CSAUDIO_CODEC_TYPE CodecType;
-    UINT32             SupportedEndpoints; /* Bitmask of CSAUDIO_ENDPOINT_TYPE */
-    CHAR               DeviceName[64];
-} CSAUDIO_REGISTER_PARAMS, *PCSAUDIO_REGISTER_PARAMS;
-
-typedef struct _CSAUDIO_VOLUME_PARAMS {
-    UINT8  Channel;          /* 0 = Left / Master, 1 = Right */
-    UINT8  VolumeDbLevel;    /* Attenuation in dB (e.g., 0 to 60) */
-    BOOLEAN Muted;
-} CSAUDIO_VOLUME_PARAMS, *PCSAUDIO_VOLUME_PARAMS;
-
-typedef struct _CSAUDIO_REG_IO {
-    UINT16 Register;
-    UINT16 Value;            /* For MAX98373, only lower 8 bits used */
-} CSAUDIO_REG_IO, *PCSAUDIO_REG_IO;

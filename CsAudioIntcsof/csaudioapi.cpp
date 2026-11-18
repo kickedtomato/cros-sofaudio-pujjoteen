@@ -6,23 +6,35 @@ Module Name:
 
 Abstract:
 
-    Cross-driver interop and sidecar codec bridge for Intel SOF Audio.
-    Communicates with Maxim MAX98373 smart amplifier and Nuvoton NAU88L25
-    codec drivers using \CallBack\CsAudioCallbackAPI and direct IOCTLs
-    over GUID_DEVINTERFACE_CSAUDIO_CODEC.
+    Codec bridge for the pujjoteen SOF driver. The DSP driver talks to the
+    codec drivers only through CoolStar's \Callback\CsAudioCallbackAPI
+    callback object:
+
+      * max98357a.sys (MAX98360A, SSP1): Start raises SD_MODE after its
+        sdmode-delay, Stop lowers it. The amp has no control bus.
+      * rt5682.sys (ALC5682I-VD, SSP0): powers up and handles jack
+        detection on its own. It needs the SSP0 clocking once
+        (CSAudioEndpointI2SParameters) to run its PLL from the 19.2 MHz
+        MCLK; it ignores Start/Stop.
 
 --*/
 
 #include "definitions.h"
 #include "endpoints.h"
 #include "hw.h"
-#include <ioevent.h>
 
-#ifndef GUID_DEVICE_INTERFACE_ARRIVAL
-// {CB3A4004-46F0-11D0-B08F-00609713053F}
-DEFINE_GUID(GUID_DEVICE_INTERFACE_ARRIVAL,
-    0xcb3a4004, 0x46f0, 0x11d0, 0xb0, 0x8f, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3f);
-#endif
+/*
+ * SSP0 "SSP0-Codec" link of sof-adl-max98360a-rt5682.tplg. These must match
+ * make_ssp0_config() / make_dai_config() in tools-gen/gen_hp_pipeline.c and
+ * gen_capture_pipelines.c, which produce the DAI_CONFIG the DSP runs SSP0 with.
+ */
+#define PUJJO_SSP0_MCLK         19200000
+#define PUJJO_SSP0_BCLK         2400000
+#define PUJJO_SSP0_RATE         48000
+#define PUJJO_SSP0_SLOTS        2
+#define PUJJO_SSP0_SLOT_WIDTH   25
+#define PUJJO_SSP0_SLOT_MASK    0x3
+#define PUJJO_SSP0_VALID_BITS   24      /* rt5682 data length: 16/20/24/32 */
 
 static VOID CsAudioCallbackFunction(
     CCsAudioSofHW* hw,
@@ -30,12 +42,12 @@ static VOID CsAudioCallbackFunction(
     PVOID Argument2
 )
 {
-    if (!hw) {
+    if (!hw || !arg) {
         return;
     }
 
     if (Argument2 == &hw->CsAudioArg2) {
-        return;
+        return;     /* our own notification */
     }
 
     CsAudioArg localArg;
@@ -43,26 +55,6 @@ static VOID CsAudioCallbackFunction(
     RtlCopyMemory(&localArg, arg, min(arg->argSz, sizeof(CsAudioArg)));
 
     hw->CSAudioAPICalled(localArg);
-}
-
-static NTSTATUS CsAudioPnpNotificationCallback(
-    _In_ PVOID NotificationStructure,
-    _Inout_opt_ PVOID Context
-)
-{
-    PDEVICE_INTERFACE_CHANGE_NOTIFICATION notification =
-        (PDEVICE_INTERFACE_CHANGE_NOTIFICATION)NotificationStructure;
-    CCsAudioSofHW* hw = (CCsAudioSofHW*)Context;
-
-    if (!hw || !notification) {
-        return STATUS_SUCCESS;
-    }
-
-    if (IsEqualGUID(notification->Event, GUID_DEVICE_INTERFACE_ARRIVAL)) {
-        DPF(D_TERSE, ("[CSAudio] Detected sidecar codec interface arrival: %wZ", notification->SymbolicLinkName));
-    }
-
-    return STATUS_SUCCESS;
 }
 
 NTSTATUS CCsAudioSofHW::CSAudioAPIInit()
@@ -96,20 +88,8 @@ NTSTATUS CCsAudioSofHW::CSAudioAPIInit()
         return STATUS_NO_CALLBACK_ACTIVE;
     }
 
-    // Register for PnP notifications of companion codecs
-    if (m_pDeviceObject && m_pDeviceObject->DriverObject) {
-        IoRegisterPlugPlayNotification(
-            EventCategoryDeviceInterfaceChange,
-            PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
-            (PVOID)&GUID_DEVINTERFACE_CSAUDIO_CODEC,
-            m_pDeviceObject->DriverObject,
-            CsAudioPnpNotificationCallback,
-            this,
-            &m_pnpNotificationHandle
-        );
-    }
-
-    // Broadcast registration
+    // Ask codec drivers that loaded before us to announce themselves; each
+    // answer arrives in CSAudioAPICalled() as a Register request.
     CsAudioArg arg;
     RtlZeroMemory(&arg, sizeof(CsAudioArg));
     arg.argSz = sizeof(CsAudioArg);
@@ -122,11 +102,6 @@ NTSTATUS CCsAudioSofHW::CSAudioAPIInit()
 
 NTSTATUS CCsAudioSofHW::CSAudioAPIDeinit()
 {
-    if (m_pnpNotificationHandle) {
-        IoUnregisterPlugPlayNotification(m_pnpNotificationHandle);
-        m_pnpNotificationHandle = NULL;
-    }
-
     if (this->m_CsAudioAPICallbackObj) {
         ExUnregisterCallback(this->m_CsAudioAPICallbackObj);
         this->m_CsAudioAPICallbackObj = NULL;
@@ -137,213 +112,64 @@ NTSTATUS CCsAudioSofHW::CSAudioAPIDeinit()
         this->m_CsAudioAPICallback = NULL;
     }
 
-    if (m_SpeakerFileObject) {
-        ObDereferenceObject(m_SpeakerFileObject);
-        m_SpeakerFileObject = NULL;
-        m_SpeakerDeviceObject = NULL;
-    }
-
-    if (m_HeadphoneFileObject) {
-        ObDereferenceObject(m_HeadphoneFileObject);
-        m_HeadphoneFileObject = NULL;
-        m_HeadphoneDeviceObject = NULL;
-    }
-
     return STATUS_SUCCESS;
 }
 
+/*
+ * A codec driver registered an endpoint (at its start, or in answer to our
+ * DSP Register broadcast). Put it in the stopped state, as upstream does,
+ * and give the headset codec the SSP0 clocking it needs for its PLL.
+ */
 void CCsAudioSofHW::CSAudioAPICalled(CsAudioArg arg)
 {
-    if (arg.endpointRequest == CSAudioEndpointRegister) {
-        CsAudioArg newArg;
-        RtlZeroMemory(&newArg, sizeof(CsAudioArg));
-        newArg.argSz = sizeof(CsAudioArg);
-        newArg.endpointType = arg.endpointType;
-        newArg.endpointRequest = CSAudioEndpointStop;
-        ExNotifyCallback(this->m_CsAudioAPICallback, &newArg, &CsAudioArg2);
-    }
-}
-
-static NTSTATUS SendIoctlToDeviceInterface(
-    _In_ const GUID* InterfaceGuid,
-    _In_ ULONG IoControlCode,
-    _In_opt_ PVOID InputBuffer,
-    _In_ ULONG InputBufferLength,
-    _Out_opt_ PVOID OutputBuffer,
-    _In_ ULONG OutputBufferLength
-)
-{
-    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
-        DPF(D_TERSE, ("[CSAudio] SendIoctlToDeviceInterface called at IRQL %u > PASSIVE_LEVEL, rejecting synchronous IOCTL\n", (ULONG)KeGetCurrentIrql()));
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    PWSTR symbolicLinkList = NULL;
-    NTSTATUS status = IoGetDeviceInterfaces(
-        InterfaceGuid,
-        NULL,
-        0,
-        &symbolicLinkList
-    );
-
-    if (!NT_SUCCESS(status) || !symbolicLinkList || !symbolicLinkList[0]) {
-        if (symbolicLinkList) {
-            ExFreePool(symbolicLinkList);
-        }
-        return STATUS_DEVICE_NOT_CONNECTED;
-    }
-
-    NTSTATUS overallStatus = STATUS_DEVICE_NOT_CONNECTED;
-    for (PWSTR symLinkStr = symbolicLinkList; *symLinkStr; symLinkStr += wcslen(symLinkStr) + 1) {
-        UNICODE_STRING symLink;
-        RtlInitUnicodeString(&symLink, symLinkStr);
-
-        PFILE_OBJECT fileObject = NULL;
-        PDEVICE_OBJECT targetDevice = NULL;
-
-        status = IoGetDeviceObjectPointer(
-            &symLink,
-            FILE_READ_DATA | FILE_WRITE_DATA,
-            &fileObject,
-            &targetDevice
-        );
-
-        if (NT_SUCCESS(status) && targetDevice) {
-            IO_STATUS_BLOCK ioStatus;
-            KEVENT event;
-            KeInitializeEvent(&event, NotificationEvent, FALSE);
-
-            PIRP irp = IoBuildDeviceIoControlRequest(
-                IoControlCode,
-                targetDevice,
-                InputBuffer,
-                InputBufferLength,
-                OutputBuffer,
-                OutputBufferLength,
-                FALSE,
-                &event,
-                &ioStatus
-            );
-
-            if (irp) {
-                status = IoCallDriver(targetDevice, irp);
-                if (status == STATUS_PENDING) {
-                    KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-                    status = ioStatus.Status;
-                }
-            } else {
-                status = STATUS_INSUFFICIENT_RESOURCES;
-            }
-
-            ObDereferenceObject(fileObject);
-            overallStatus = status;
-        }
-    }
-
-    ExFreePool(symbolicLinkList);
-    return overallStatus;
-}
-
-NTSTATUS CCsAudioSofHW::NotifySidecarCodec(CSAudioEndpointType endpoint, BOOL start)
-{
-    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
-        DPF(D_TERSE, ("[CSAudio] NotifySidecarCodec called at IRQL %u > PASSIVE_LEVEL, skipping synchronous notification\n", (ULONG)KeGetCurrentIrql()));
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    CSAUDIO_STREAM_CONFIG config;
-    RtlZeroMemory(&config, sizeof(config));
-    config.SampleRate = 48000;
-    config.BitsPerSample = 16;
-    config.Channels = 2;
-    config.SlotWidth = 16;
-    config.EndpointType = (UINT8)endpoint;
-
-    ULONG ioctl = start ? IOCTL_CSAUDIO_STREAM_START : IOCTL_CSAUDIO_STREAM_STOP;
-    NTSTATUS status = STATUS_SUCCESS;
-    NTSTATUS overallStatus = STATUS_SUCCESS;
-
-    if (endpoint == CSAudioEndpointTypeSpeaker) {
-        // Notify MAX98373 smart amplifier
-        status = SendIoctlToDeviceInterface(
-            &GUID_DEVINTERFACE_MAX98373_AMP,
-            ioctl,
-            &config,
-            sizeof(config),
-            NULL,
-            0
-        );
-        if (NT_SUCCESS(status)) {
-            overallStatus = STATUS_SUCCESS;
-        } else {
-            DPF(D_TERSE, ("[CSAudio] NotifySidecarCodec: MAX98373_AMP IOCTL 0x%08X, falling back to CSAUDIO_CODEC\n", status));
-            status = SendIoctlToDeviceInterface(
-                &GUID_DEVINTERFACE_CSAUDIO_CODEC,
-                ioctl,
-                &config,
-                sizeof(config),
-                NULL,
-                0
-            );
-            if (NT_SUCCESS(status)) {
-                overallStatus = STATUS_SUCCESS;
-            } else {
-                overallStatus = status;
-            }
-        }
-    } else if (endpoint == CSAudioEndpointTypeHeadphone || endpoint == CSAudioEndpointTypeMicJack) {
-        // Notify NAU88L25 codec
-        status = SendIoctlToDeviceInterface(
-            &GUID_DEVINTERFACE_NAU8825_CODEC,
-            ioctl,
-            &config,
-            sizeof(config),
-            NULL,
-            0
-        );
-        if (NT_SUCCESS(status)) {
-            overallStatus = STATUS_SUCCESS;
-        } else {
-            DPF(D_TERSE, ("[CSAudio] NotifySidecarCodec: NAU8825_CODEC IOCTL 0x%08X, falling back to CSAUDIO_CODEC\n", status));
-            status = SendIoctlToDeviceInterface(
-                &GUID_DEVINTERFACE_CSAUDIO_CODEC,
-                ioctl,
-                &config,
-                sizeof(config),
-                NULL,
-                0
-            );
-            if (NT_SUCCESS(status)) {
-                overallStatus = STATUS_SUCCESS;
-            } else {
-                overallStatus = status;
-            }
-        }
-    }
-
-    return overallStatus;
-}
-
-void CCsAudioSofHW::SendSidecarVolume(CSAudioEndpointType endpoint, LONG volumeLevel, BOOL muted)
-{
-    if (KeGetCurrentIrql() > PASSIVE_LEVEL) {
-        DPF(D_TERSE, ("[CSAudio] SendSidecarVolume called at IRQL %u > PASSIVE_LEVEL, skipping\n", (ULONG)KeGetCurrentIrql()));
+    if (arg.endpointRequest != CSAudioEndpointRegister ||
+        arg.endpointType == CSAudioEndpointTypeDSP) {
         return;
     }
 
-    CSAUDIO_VOLUME_PARAMS params;
-    RtlZeroMemory(&params, sizeof(params));
-    params.Channel = 0;
-    params.VolumeDbLevel = (UINT8)(volumeLevel > 0 ? volumeLevel : -volumeLevel);
-    params.Muted = muted ? TRUE : FALSE;
+    CsAudioArg newArg;
+    RtlZeroMemory(&newArg, sizeof(CsAudioArg));
+    newArg.argSz = sizeof(CsAudioArg);
+    newArg.endpointType = arg.endpointType;
+    newArg.endpointRequest = CSAudioEndpointStop;
+    ExNotifyCallback(this->m_CsAudioAPICallback, &newArg, &CsAudioArg2);
 
-    ULONG ioctl = muted ? IOCTL_CSAUDIO_SET_MUTE : IOCTL_CSAUDIO_SET_VOLUME;
-
-    if (endpoint == CSAudioEndpointTypeSpeaker) {
-        SendIoctlToDeviceInterface(&GUID_DEVINTERFACE_MAX98373_AMP, ioctl, &params, sizeof(params), NULL, 0);
-        SendIoctlToDeviceInterface(&GUID_DEVINTERFACE_CSAUDIO_CODEC, ioctl, &params, sizeof(params), NULL, 0);
-    } else if (endpoint == CSAudioEndpointTypeHeadphone) {
-        SendIoctlToDeviceInterface(&GUID_DEVINTERFACE_NAU8825_CODEC, ioctl, &params, sizeof(params), NULL, 0);
-        SendIoctlToDeviceInterface(&GUID_DEVINTERFACE_CSAUDIO_CODEC, ioctl, &params, sizeof(params), NULL, 0);
+    if (arg.endpointType == CSAudioEndpointTypeHeadphone ||
+        arg.endpointType == CSAudioEndpointTypeMicJack) {
+        SendI2SParameters(arg.endpointType);
     }
+}
+
+/*
+ * Tell rt5682.sys how SSP0 is clocked. It reprograms PLL1 (19.2 MHz MCLK ->
+ * 24.576 MHz SYSCLK), its SYSCLK source and its I2S data length, and keeps
+ * the values for its own D0 re-initialisation. Callers make sure SSP0 is
+ * idle, because a PLL change under a running stream glitches it.
+ */
+void CCsAudioSofHW::SendI2SParameters(_In_ CSAudioEndpointType endpointType)
+{
+    if (!m_CsAudioAPICallback) {
+        return;
+    }
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        // rt5682.sys writes its registers synchronously over I2C here.
+        DPF(D_TERSE, ("[CSAudio] I2S parameters skipped at IRQL %u\n", (ULONG)KeGetCurrentIrql()));
+        return;
+    }
+
+    CsAudioArg arg;
+    RtlZeroMemory(&arg, sizeof(CsAudioArg));
+    arg.argSz = sizeof(CsAudioArg);
+    arg.endpointType = endpointType;
+    arg.endpointRequest = CSAudioEndpointI2SParameters;
+    arg.i2sParameters.version = 1;
+    arg.i2sParameters.mclk = PUJJO_SSP0_MCLK;
+    arg.i2sParameters.bclk_rate = PUJJO_SSP0_BCLK;
+    arg.i2sParameters.frequency = PUJJO_SSP0_RATE;
+    arg.i2sParameters.tdm_slots = PUJJO_SSP0_SLOTS;
+    arg.i2sParameters.tdm_slot_width = PUJJO_SSP0_SLOT_WIDTH;
+    arg.i2sParameters.rx_slots = PUJJO_SSP0_SLOT_MASK;
+    arg.i2sParameters.tx_slots = PUJJO_SSP0_SLOT_MASK;
+    arg.i2sParameters.valid_bits = PUJJO_SSP0_VALID_BITS;
+    ExNotifyCallback(m_CsAudioAPICallback, &arg, &CsAudioArg2);
 }

@@ -8,7 +8,7 @@ Abstract:
 
     Implementation of Intel Sound Open Firmware (SOF) Audio Hardware Interface.
     Communicates with SklHdaudBus via GUID_ADSP_BUS_INTERFACE for DSP DMA engines,
-    and controls Maxim MAX98373 and Nuvoton NAU88L25 companion codecs.
+    and drives the MAX98360A amp and ALC5682I-VD codec through CsAudioCallbackAPI.
 
 --*/
 
@@ -73,11 +73,6 @@ CCsAudioSofHW::CCsAudioSofHW(_In_ PRESOURCELIST ResourceList, _In_ PDEVICE_OBJEC
       m_pDeviceObject(DeviceObject),
       m_CsAudioAPICallback(NULL),
       m_CsAudioAPICallbackObj(NULL),
-      m_pnpNotificationHandle(NULL),
-      m_SpeakerFileObject(NULL),
-      m_SpeakerDeviceObject(NULL),
-      m_HeadphoneFileObject(NULL),
-      m_HeadphoneDeviceObject(NULL),
       m_dspBooted(FALSE),
       m_gprocenWasSet(FALSE),
       m_gprocenOn(FALSE),
@@ -312,15 +307,26 @@ void CCsAudioSofHW::NotifyCodecs(_In_ CSAudioEndpointType endpointType, _In_ BOO
     arg.endpointType = endpointType;
     arg.endpointRequest = start ? CSAudioEndpointStart : CSAudioEndpointStop;
 
-    if (m_CsAudioAPICallback) {
-        ExNotifyCallback(m_CsAudioAPICallback, &arg, &CsAudioArg2);
+    if (!m_CsAudioAPICallback) {
+        return;
     }
-    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
-        NTSTATUS st = NotifySidecarCodec(endpointType, start);
-        if (!NT_SUCCESS(st) && st != STATUS_DEVICE_NOT_CONNECTED) {
-            DPF(D_TERSE, ("[CsAudioIntcsof] sidecar codec notification returned 0x%08X\n", st));
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        // max98357a.sys writes SD_MODE synchronously in its callback.
+        DPF(D_TERSE, ("[CsAudioIntcsof] codec notification skipped at IRQL %u\n", (ULONG)KeGetCurrentIrql()));
+        return;
+    }
+
+    // Re-send SSP0 clocking before the first SSP0 stream starts (rt5682 may
+    // have been reset); never while the other SSP0 direction is running.
+    if (start && (endpointType == CSAudioEndpointTypeHeadphone ||
+                  endpointType == CSAudioEndpointTypeMicJack)) {
+        ULONG other = (endpointType == CSAudioEndpointTypeHeadphone) ? SOF_PATH_MICJACK : SOF_PATH_HP;
+        if (m_path[other].running == 0) {
+            SendI2SParameters(endpointType);
         }
     }
+
+    ExNotifyCallback(m_CsAudioAPICallback, &arg, &CsAudioArg2);
 }
 
 NTSTATUS CCsAudioSofHW::sof_play(eDeviceType deviceType, UINT32 byteCount)
@@ -447,16 +453,21 @@ LONG CCsAudioSofHW::GetPeakMeterValue(_In_ ULONG ulNode, _In_ ULONG ulChannel)
     return 0;
 }
 
+/*
+ * No topology volume/mute nodes are exposed, so Windows applies endpoint
+ * volume in software. Neither the MAX98360A nor rt5682.sys has a volume
+ * interface; the DSP PGA attenuation comes from the registry at setup.
+ */
 void CCsAudioSofHW::SetVolume(_In_ eDeviceType deviceType, _In_ LONG volumeLevel)
 {
-    CSAudioEndpointType ep = GetCSAudioEndpoint(deviceType);
-    SendSidecarVolume(ep, volumeLevel, FALSE);
+    UNREFERENCED_PARAMETER(deviceType);
+    UNREFERENCED_PARAMETER(volumeLevel);
 }
 
 void CCsAudioSofHW::SetMute(_In_ eDeviceType deviceType, _In_ BOOL muted)
 {
-    CSAudioEndpointType ep = GetCSAudioEndpoint(deviceType);
-    SendSidecarVolume(ep, 0, muted);
+    UNREFERENCED_PARAMETER(deviceType);
+    UNREFERENCED_PARAMETER(muted);
 }
 
 CSAudioEndpointType CCsAudioSofHW::GetCSAudioEndpoint(eDeviceType deviceType)

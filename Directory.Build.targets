@@ -1,0 +1,17 @@
+<Project>
+  <!--
+    WDK 10.0.28000 ships its INF tools as x86 binaries, and two MSBuild steps
+    fail to launch them from VS 2026's 64-bit MSBuild:
+      * Inf2Cat: "An attempt was made to load a program with an incorrect
+        format". inf2cat.exe itself works, so build.cmd runs it directly
+        after MSBuild finishes.
+      * InfVerif / package verification: "Unable to load DLL
+        'x86\InfVerif.dll'". The fork's own projects already set
+        SkipPackageVerification; this applies it to the imported CoolStar
+        projects (rt5682, max98357a) too, without editing their files.
+  -->
+  <PropertyGroup>
+    <EnableInf2cat>false</EnableInf2cat>
+    <SkipPackageVerification>true</SkipPackageVerification>
+  </PropertyGroup>
+</Project>

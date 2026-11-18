@@ -183,15 +183,14 @@ jobs:
           }
 
           $signedFiles = @(
-              'x64\Release\Max98373Audio\Max98373Audio.sys',
-              'x64\Release\Max98373Audio\max98373audio.cat',
-              'x64\Release\Nau8825Audio\Nau8825Audio.sys',
-              'x64\Release\Nau8825Audio\nau8825audio.cat',
+              'x64\Release\rt5682\rt5682.sys',
+              'x64\Release\rt5682\rt5682.cat',
+              'x64\Release\max98357a\max98357a.sys',
+              'x64\Release\max98357a\max98357a.cat',
               'x64\Release\SklHdaudBus\SklHdaudBus.sys',
               'x64\Release\SklHdaudBus\sklhdaudbus.cat',
               'x64\Release\CsAudioIntcsof\CsAudioIntcsof.sys',
               'x64\Release\CsAudioIntcsof\csaudiointcsof.cat',
-              'x64\Release\CrosAudioTest.exe',
               'x64\Release\csaudioendpointswitcher.exe'
           ) | ForEach-Object { Join-Path $env:GITHUB_WORKSPACE $_ }
 
@@ -226,27 +225,22 @@ jobs:
           $requiredFiles = @(
               'ChromebookAudio.cer', 'Install.cmd', 'install.ps1',
               'Uninstall.cmd', 'uninstall.ps1', 'Collect-Logs.cmd',
-              'README.txt', 'LICENSE', 'LICENCE.sof-firmware', 'VERSION.txt',
+              'README.txt', 'LICENSE.txt', 'LICENCE.sof-firmware.txt', 'VERSION.txt',
+              'LICENSE.rt5682.txt', 'LICENSE.max98357a.txt',
               'Switcher\csaudioendpointswitcher.exe',
-              'Tools\cros_audio_test.exe',
               'Drivers\SklHdaudBus\sklhdaudbus.inf',
               'Drivers\SklHdaudBus\SklHdaudBus.sys',
               'Drivers\SklHdaudBus\sklhdaudbus.cat',
               'Drivers\CsAudioIntcsof\csaudiointcsof.inf',
               'Drivers\CsAudioIntcsof\CsAudioIntcsof.sys',
               'Drivers\CsAudioIntcsof\csaudiointcsof.cat',
-              'Drivers\CsAudioIntcsof\sof-adl.ri',
-              'Drivers\CsAudioIntcsof\sof-apl.ri',
-              'Drivers\CsAudioIntcsof\sof-cnl.ri',
-              'Drivers\CsAudioIntcsof\sof-glk.ri',
-              'Drivers\CsAudioIntcsof\sof-jsl.ri',
-              'Drivers\CsAudioIntcsof\sof-tgl.ri',
-              'Drivers\Nau8825Audio\Nau8825Audio.inf',
-              'Drivers\Nau8825Audio\Nau8825Audio.sys',
-              'Drivers\Nau8825Audio\nau8825audio.cat',
-              'Drivers\Max98373Audio\Max98373Audio.inf',
-              'Drivers\Max98373Audio\Max98373Audio.sys',
-              'Drivers\Max98373Audio\max98373audio.cat'
+              'Drivers\CsAudioIntcsof\sof-adl-n.ri',
+              'Drivers\rt5682\rt5682.inf',
+              'Drivers\rt5682\rt5682.sys',
+              'Drivers\rt5682\rt5682.cat',
+              'Drivers\max98357a\max98357a.inf',
+              'Drivers\max98357a\max98357a.sys',
+              'Drivers\max98357a\max98357a.cat'
           )
           foreach ($relativePath in $requiredFiles) {
               $fullPath = Join-Path $extractPath $relativePath

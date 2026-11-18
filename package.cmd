@@ -2,19 +2,21 @@
 setlocal EnableDelayedExpansion
 
 set "ROOT_DIR=%~dp0"
-set "VERSION=v1.2.2"
+set "OUT_DIR=%ROOT_DIR%x64\Release"
+set "VERSION=v0.1.0-pujjoteen"
 if not "%~1"=="" set "VERSION=%~1"
+set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 max98357a"
 
 set "DIST_DIR=%ROOT_DIR%dist\cros-sofaudio-%VERSION%"
 set "ZIP_FILE=%ROOT_DIR%cros-sofaudio-%VERSION%.zip"
 
 echo ====================================================================
-echo  Chromebook SOF Audio Drivers - Packaging Release (%VERSION%)
+echo  Chromebook SOF Audio Drivers (pujjoteen) - Packaging %VERSION%
 echo ====================================================================
 echo.
 
-if not exist "%ROOT_DIR%x64\Release\Max98373Audio\Max98373Audio.sys" (
-    echo [INFO] Binaries not found. Running build.cmd first...
+if not exist "%OUT_DIR%\CsAudioIntcsof\csaudiointcsof.cat" (
+    echo [INFO] Signed packages not found. Running build.cmd first...
     call "%ROOT_DIR%build.cmd"
     if !ERRORLEVEL! neq 0 (
         echo [ERROR] Build failed! Cannot package release.
@@ -22,99 +24,62 @@ if not exist "%ROOT_DIR%x64\Release\Max98373Audio\Max98373Audio.sys" (
     )
 )
 
-set "CERT_FILE=%ROOT_DIR%x64\Release\ChromebookAudio.cer"
-if not exist "%CERT_FILE%" set "CERT_FILE=%ROOT_DIR%ChromebookAudio.cer"
+set "CERT_FILE=%OUT_DIR%\ChromebookAudio.cer"
 if not exist "%CERT_FILE%" (
-    echo [ERROR] The public certificate for the build outputs is missing.
-    echo Run build.cmd with the signing certificate installed before packaging.
+    echo [ERROR] %CERT_FILE% is missing. Run build.cmd before packaging.
     exit /b 1
 )
 
+set "SIGN_PATHS="
+for %%d in (%PACKAGES%) do (
+    for %%f in ("%OUT_DIR%\%%d\*.sys" "%OUT_DIR%\%%d\*.cat") do set "SIGN_PATHS=!SIGN_PATHS!%%~ff;"
+)
+set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe"
+
 echo [INFO] Verifying package signatures and signer certificate...
-set "SIGNATURE_VERIFY_POWERSHELL=powershell.exe"
-if defined CSAUDIO_SIGNATURE_POWERSHELL set "SIGNATURE_VERIFY_POWERSHELL=!CSAUDIO_SIGNATURE_POWERSHELL!"
-"!SIGNATURE_VERIFY_POWERSHELL!" -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Test-DriverSignatures.ps1" ^
-    -CertificatePath "%CERT_FILE%" ^
-    -Paths "%ROOT_DIR%x64\Release\Max98373Audio\Max98373Audio.sys;%ROOT_DIR%x64\Release\Max98373Audio\max98373audio.cat;%ROOT_DIR%x64\Release\Nau8825Audio\Nau8825Audio.sys;%ROOT_DIR%x64\Release\Nau8825Audio\nau8825audio.cat;%ROOT_DIR%x64\Release\SklHdaudBus\SklHdaudBus.sys;%ROOT_DIR%x64\Release\SklHdaudBus\sklhdaudbus.cat;%ROOT_DIR%x64\Release\CsAudioIntcsof\CsAudioIntcsof.sys;%ROOT_DIR%x64\Release\CsAudioIntcsof\csaudiointcsof.cat;%ROOT_DIR%x64\Release\CrosAudioTest.exe;%ROOT_DIR%x64\Release\csaudioendpointswitcher.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Test-DriverSignatures.ps1" ^
+    -CertificatePath "%CERT_FILE%" -Paths "!SIGN_PATHS!"
 if !ERRORLEVEL! neq 0 (
     echo [ERROR] Packaging stopped because the certificate does not match the signed binaries.
     exit /b 1
 )
 
-if exist "%DIST_DIR%" (
-    echo [INFO] Cleaning previous dist directory...
-    rmdir /s /q "%DIST_DIR%"
-)
+if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
 mkdir "%DIST_DIR%"
 
 echo [INFO] Copying driver packages to Drivers\...
-mkdir "%DIST_DIR%\Drivers\CsAudioIntcsof"
-xcopy /y /e "%ROOT_DIR%x64\Release\CsAudioIntcsof\*" "%DIST_DIR%\Drivers\CsAudioIntcsof\" >nul
-copy /y "%ROOT_DIR%CsAudioIntcsof\sof-*.ri" "%DIST_DIR%\Drivers\CsAudioIntcsof\" >nul
-
-mkdir "%DIST_DIR%\Drivers\Max98373Audio"
-xcopy /y /e "%ROOT_DIR%x64\Release\Max98373Audio\*" "%DIST_DIR%\Drivers\Max98373Audio\" >nul
-
-mkdir "%DIST_DIR%\Drivers\Nau8825Audio"
-xcopy /y /e "%ROOT_DIR%x64\Release\Nau8825Audio\*" "%DIST_DIR%\Drivers\Nau8825Audio\" >nul
-
-mkdir "%DIST_DIR%\Drivers\SklHdaudBus"
-xcopy /y /e "%ROOT_DIR%x64\Release\SklHdaudBus\*" "%DIST_DIR%\Drivers\SklHdaudBus\" >nul
+for %%d in (%PACKAGES%) do (
+    mkdir "%DIST_DIR%\Drivers\%%d"
+    xcopy /y /e "%OUT_DIR%\%%d\*" "%DIST_DIR%\Drivers\%%d\" >nul
+)
 
 echo [INFO] Copying endpoint switcher service...
 mkdir "%DIST_DIR%\Switcher"
-copy /y "%ROOT_DIR%x64\Release\csaudioendpointswitcher.exe" "%DIST_DIR%\Switcher\" >nul
+copy /y "%OUT_DIR%\csaudioendpointswitcher.exe" "%DIST_DIR%\Switcher\" >nul
 
-echo [INFO] Copying diagnostic utility...
-mkdir "%DIST_DIR%\Tools"
-copy /y "%ROOT_DIR%x64\Release\CrosAudioTest.exe" "%DIST_DIR%\Tools\cros_audio_test.exe" >nul
-
-echo [INFO] Copying installer scripts and documentation...
-copy /y "%ROOT_DIR%installer\Install.cmd" "%DIST_DIR%\" >nul
-copy /y "%ROOT_DIR%installer\install.ps1" "%DIST_DIR%\" >nul
-copy /y "%ROOT_DIR%installer\Uninstall.cmd" "%DIST_DIR%\" >nul
-copy /y "%ROOT_DIR%installer\uninstall.ps1" "%DIST_DIR%\" >nul
-copy /y "%ROOT_DIR%installer\Collect-Logs.cmd" "%DIST_DIR%\" >nul
-
+echo [INFO] Copying installer scripts, documentation and licences...
+for %%f in (Install.cmd install.ps1 Uninstall.cmd uninstall.ps1 Collect-Logs.cmd README.txt) do (
+    copy /y "%ROOT_DIR%installer\%%f" "%DIST_DIR%\" >nul
+)
 copy /y "%CERT_FILE%" "%DIST_DIR%\ChromebookAudio.cer" >nul
-
-if exist "%ROOT_DIR%installer\README.txt" (
-    copy /y "%ROOT_DIR%installer\README.txt" "%DIST_DIR%\" >nul
-) else if exist "%ROOT_DIR%README.txt" (
-    copy /y "%ROOT_DIR%README.txt" "%DIST_DIR%\" >nul
-)
-
-if exist "%ROOT_DIR%CsAudioIntcsof\LICENCE.sof-firmware" (
-    copy /y "%ROOT_DIR%CsAudioIntcsof\LICENCE.sof-firmware" "%DIST_DIR%\" >nul
-) else if exist "%ROOT_DIR%LICENCE.sof-firmware" (
-    copy /y "%ROOT_DIR%LICENCE.sof-firmware" "%DIST_DIR%\" >nul
-)
-
-if exist "%ROOT_DIR%LICENSE" (
-    copy /y "%ROOT_DIR%LICENSE" "%DIST_DIR%\" >nul
-)
-
-if exist "%ROOT_DIR%installer\VERSION.txt" (
-    copy /y "%ROOT_DIR%installer\VERSION.txt" "%DIST_DIR%\" >nul
-) else (
-    echo %VERSION%> "%DIST_DIR%\VERSION.txt"
-)
+copy /y "%ROOT_DIR%LICENSE" "%DIST_DIR%\LICENSE.txt" >nul
+copy /y "%ROOT_DIR%CsAudioIntcsof\LICENCE.sof-firmware-intel" "%DIST_DIR%\LICENCE.sof-firmware.txt" >nul
+copy /y "%ROOT_DIR%rt5682\LICENSE.txt" "%DIST_DIR%\LICENSE.rt5682.txt" >nul
+copy /y "%ROOT_DIR%max98357a\LICENSE.txt" "%DIST_DIR%\LICENSE.max98357a.txt" >nul
+echo %VERSION%> "%DIST_DIR%\VERSION.txt"
 
 if exist "%ZIP_FILE%" del /f /q "%ZIP_FILE%"
-
 echo [INFO] Creating release archive: %ZIP_FILE%...
 powershell -NoProfile -Command "Compress-Archive -Path '%DIST_DIR%\*' -DestinationPath '%ZIP_FILE%' -CompressionLevel Optimal"
-
-if %ERRORLEVEL% equ 0 (
-    echo.
-    echo ====================================================================
-    echo  [SUCCESS] Release package created successfully!
-    echo  Directory: %DIST_DIR%
-    echo  Archive:   %ZIP_FILE%
-    echo ====================================================================
-) else (
+if errorlevel 1 (
     echo [ERROR] Failed to create ZIP archive!
     exit /b 1
 )
 
+echo.
+echo ====================================================================
+echo  [SUCCESS] Release package created.
+echo  Directory: %DIST_DIR%
+echo  Archive:   %ZIP_FILE%
+echo ====================================================================
 endlocal

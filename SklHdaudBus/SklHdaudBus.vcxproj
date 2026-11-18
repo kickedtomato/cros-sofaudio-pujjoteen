@@ -53,6 +53,12 @@
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
+  <!-- WDK 10.0.28000 references D3DDDI_QOS without defining it; see Common\wdk_compat.h. -->
+  <ItemDefinitionGroup Condition="'$(TargetPlatformVersion)'=='10.0.28000.0'">
+    <ClCompile>
+      <ForcedIncludeFiles>$(MSBuildThisFileDirectory)..\Common\wdk_compat.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>

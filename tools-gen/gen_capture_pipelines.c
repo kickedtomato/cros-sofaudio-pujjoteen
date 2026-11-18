@@ -1,20 +1,24 @@
 /*
  * gen_capture_pipelines.c - host-side generator (NOT part of the driver).
  *
- * Builds IPC3 messages for the two capture paths used on volmar:
+ * Builds IPC3 messages for the two capture paths used on the Google
+ * "pujjoteen" Chromebook (Alder Lake-N, sof-adl-max98360a-rt5682.tplg):
  *
  *   Pipeline 3: SSP0.IN -> buffer -> volume -> buffer -> PCM1C
- *               (NAU88L25 headset microphone, 48 kHz stereo slots)
+ *               (ALC5682I-VD headset microphone; SSP0 link "SSP0-Codec":
+ *               I2S, MCLK 19.2 MHz, BCLK 2.4 MHz, 2 x 25-bit slots,
+ *               24 valid bits, BCLK_ES, DAI format S24_4LE)
  *   Pipeline 4: DMIC0.IN -> buffer -> volume -> buffer -> PCM99C
  *               (internal two-channel PDM microphone array)
  *
- * The layouts come from SOF v2.2.1 IPC headers, matching sof-adl.ri. The
- * DMIC parameters follow sof-adl-nau8825.m4 plus volmar's coreboot
- * mic-tplg="_2ch_pdm0" setting.
+ * The layouts come from the SOF IPC3 ABI headers, matching sof-adl-n.ri v2.2.
+ * The DMIC parameters are the topology's dmic01 link (driver version 1,
+ * PDM clock 2.4-4.8 MHz, duty 40-60 %, 48 kHz, 32-bit FIFO, 200 ms unmute
+ * ramp) restricted to PDM0 as pujjoteen's coreboot sets
+ * mic-tplg = "2ch-pdm0" (same as upstream volmar, so pipeline 4 is
+ * byte-identical to upstream's).
  *
- * Build & run:
- *   cc -I<sof-v2.2.1>/src/include -DCONFIG_IPC_MAJOR_3=1 \
- *      gen_capture_pipelines.c -lm -o gen && ./gen > sof_capture_pipelines.h
+ * Build & run: tools-gen\build_generators.cmd
  */
 #define CONFIG_IPC_MAJOR_3 1
 #define BIT(x) (1u << (x))
@@ -96,15 +100,15 @@ static void make_ssp0_config(struct sof_ipc_dai_config *d, uint8_t flags)
     d->dai_index = 0;
     d->format = SOF_DAI_FMT_I2S | SOF_DAI_FMT_NB_NF | SOF_DAI_FMT_CBC_CFC;
     d->flags = flags;
-    d->ssp.mclk_rate = 24576000;
-    d->ssp.bclk_rate = 3072000;
+    d->ssp.mclk_rate = 19200000;
+    d->ssp.bclk_rate = 2400000;
     d->ssp.fsync_rate = 48000;
     d->ssp.tdm_slots = 2;
-    d->ssp.tdm_slot_width = 32;
+    d->ssp.tdm_slot_width = 25;
     d->ssp.mclk_direction = 1;
     d->ssp.tx_slots = 3;
     d->ssp.rx_slots = 3;
-    d->ssp.sample_valid_bits = 32;
+    d->ssp.sample_valid_bits = 24;
     d->ssp.clks_control = SOF_DAI_INTEL_SSP_CLKCTRL_BCLK_ES;
 }
 
@@ -257,7 +261,8 @@ static void generate_path(path_out *o, uint32_t pipe_id, uint32_t pcm_id,
         d->config.hdr.size = sizeof(d->config);
         d->config.periods_sink = 2;
         d->config.periods_source = 0;
-        d->config.frame_fmt = SOF_IPC_FRAME_S32_LE;
+        /* SSP0 widgets are s24le in the topology; DMIC0 delivers s32le. */
+        d->config.frame_fmt = dmic ? SOF_IPC_FRAME_S32_LE : SOF_IPC_FRAME_S24_4LE;
         d->direction = SOF_IPC_STREAM_CAPTURE;
         d->dai_index = 0;
         d->type = dmic ? SOF_DAI_INTEL_DMIC : SOF_DAI_INTEL_SSP;

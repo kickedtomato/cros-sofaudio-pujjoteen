@@ -2,11 +2,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Max98373Audio", "Max98373Audio\Max98373Audio.vcxproj", "{A89746A1-9837-4D21-B457-3C98373E0001}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "rt5682", "rt5682\rt5682.vcxproj", "{36580C07-EDC3-4C2B-B45F-6AB017E01A5D}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Nau8825Audio", "Nau8825Audio\Nau8825Audio.vcxproj", "{88250001-8825-4B88-A882-8825BA882501}"
-EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CrosAudioTest", "CrosAudioTest\CrosAudioTest.vcxproj", "{4637B001-A120-4E1F-A882-C705A0D10001}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "max98357a", "max98357a\max98357a.vcxproj", "{B3E71397-9BE4-492B-AAED-4D056E59CB1F}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SklHdaudBus", "SklHdaudBus\SklHdaudBus.vcxproj", "{752A2CAE-3455-4D18-A184-8B34B22632CE}"
 EndProject
@@ -20,18 +18,14 @@ Global
 		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{A89746A1-9837-4D21-B457-3C98373E0001}.Debug|x64.ActiveCfg = Debug|x64
-		{A89746A1-9837-4D21-B457-3C98373E0001}.Debug|x64.Build.0 = Debug|x64
-		{A89746A1-9837-4D21-B457-3C98373E0001}.Release|x64.ActiveCfg = Release|x64
-		{A89746A1-9837-4D21-B457-3C98373E0001}.Release|x64.Build.0 = Release|x64
-		{88250001-8825-4B88-A882-8825BA882501}.Debug|x64.ActiveCfg = Debug|x64
-		{88250001-8825-4B88-A882-8825BA882501}.Debug|x64.Build.0 = Debug|x64
-		{88250001-8825-4B88-A882-8825BA882501}.Release|x64.ActiveCfg = Release|x64
-		{88250001-8825-4B88-A882-8825BA882501}.Release|x64.Build.0 = Release|x64
-		{4637B001-A120-4E1F-A882-C705A0D10001}.Debug|x64.ActiveCfg = Debug|x64
-		{4637B001-A120-4E1F-A882-C705A0D10001}.Debug|x64.Build.0 = Debug|x64
-		{4637B001-A120-4E1F-A882-C705A0D10001}.Release|x64.ActiveCfg = Release|x64
-		{4637B001-A120-4E1F-A882-C705A0D10001}.Release|x64.Build.0 = Release|x64
+		{36580C07-EDC3-4C2B-B45F-6AB017E01A5D}.Debug|x64.ActiveCfg = Debug|x64
+		{36580C07-EDC3-4C2B-B45F-6AB017E01A5D}.Debug|x64.Build.0 = Debug|x64
+		{36580C07-EDC3-4C2B-B45F-6AB017E01A5D}.Release|x64.ActiveCfg = Release|x64
+		{36580C07-EDC3-4C2B-B45F-6AB017E01A5D}.Release|x64.Build.0 = Release|x64
+		{B3E71397-9BE4-492B-AAED-4D056E59CB1F}.Debug|x64.ActiveCfg = Debug|x64
+		{B3E71397-9BE4-492B-AAED-4D056E59CB1F}.Debug|x64.Build.0 = Debug|x64
+		{B3E71397-9BE4-492B-AAED-4D056E59CB1F}.Release|x64.ActiveCfg = Release|x64
+		{B3E71397-9BE4-492B-AAED-4D056E59CB1F}.Release|x64.Build.0 = Release|x64
 		{752A2CAE-3455-4D18-A184-8B34B22632CE}.Debug|x64.ActiveCfg = Debug|x64
 		{752A2CAE-3455-4D18-A184-8B34B22632CE}.Debug|x64.Build.0 = Debug|x64
 		{752A2CAE-3455-4D18-A184-8B34B22632CE}.Release|x64.ActiveCfg = Release|x64

@@ -1,11 +1,13 @@
 /*
  * csaudioendpointswitcher.cpp — Chromebook Audio Endpoint Switcher Service
  *
- * Automatically monitors NAU88L25 3.5mm jack insertion/removal events and
- * switches Windows 11 default endpoints and endpoint visibility.
+ * Monitors 3.5mm jack insertion/removal on the ALC5682I-VD headset codec
+ * and switches Windows 11 default endpoints and endpoint visibility.
  *
- * Replaces legacy CoolStar HID-polling switcher with zero-overhead native
- * IOCTL notifications over GUID_DEVINTERFACE_NAU8825_CODEC.
+ * Pujjoteen build: jack events come from CoolStar's rt5682.sys, which
+ * reports the jack type in an input report of its vendor HID collection
+ * (see Common/csaudio_codec.h). The read blocks until the codec sends a
+ * report, so there is no polling.
  *
  * Copyright (c) 2026. Licensed under the MIT License.
  */
@@ -28,7 +30,10 @@
 
 #include "..\Common\csaudio_codec.h"
 
+#include <hidsdi.h>
+#include <hidpi.h>
 #pragma comment(lib, "setupapi.lib")
+#pragma comment(lib, "hid.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "advapi32.lib")
 
@@ -70,7 +75,9 @@ public:
 static SERVICE_STATUS        g_ServiceStatus;
 static SERVICE_STATUS_HANDLE g_StatusHandle = NULL;
 static HANDLE                g_StopEvent = NULL;
-static HANDLE                g_Nau8825Device = INVALID_HANDLE_VALUE;
+static HANDLE                g_JackDevice = INVALID_HANDLE_VALUE;
+static USHORT                g_JackInputLength = 0;
+static USHORT                g_JackOutputLength = 0;
 static BOOL                  g_IsConsoleMode = FALSE;
 
 // Cached Endpoint Device IDs
@@ -467,68 +474,96 @@ static void ApplyJackState(CSAUDIO_JACK_STATE state) {
  * Hardware Monitor Worker Thread
  * ========================================================================= */
 
-static HANDLE OpenNau8825Device() {
-    HDEVINFO hDevInfo = SetupDiGetClassDevs(
-        &GUID_DEVINTERFACE_NAU8825_CODEC,
-        NULL,
-        NULL,
-        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
-    );
+static HANDLE OpenRt5682JackDevice() {
+    GUID hidGuid;
+    HidD_GetHidGuid(&hidGuid);
 
+    HDEVINFO hDevInfo = SetupDiGetClassDevs(
+        &hidGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (hDevInfo == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
 
+    HANDLE found = INVALID_HANDLE_VALUE;
     SP_DEVICE_INTERFACE_DATA ifData;
     ifData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
 
-    HANDLE hDevice = INVALID_HANDLE_VALUE;
-
-    if (SetupDiEnumDeviceInterfaces(hDevInfo, NULL, &GUID_DEVINTERFACE_NAU8825_CODEC, 0, &ifData)) {
+    for (DWORD index = 0;
+         found == INVALID_HANDLE_VALUE &&
+         SetupDiEnumDeviceInterfaces(hDevInfo, NULL, &hidGuid, index, &ifData);
+         index++) {
         DWORD reqSize = 0;
         SetupDiGetDeviceInterfaceDetail(hDevInfo, &ifData, NULL, 0, &reqSize, NULL);
         PSP_DEVICE_INTERFACE_DETAIL_DATA detail = (PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(reqSize);
-        if (detail) {
-            detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
-            if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &ifData, detail, reqSize, NULL, NULL)) {
-                LogMsg(L"[SWITCHER] Connecting to NAU8825 device: %s", detail->DevicePath);
-                hDevice = CreateFile(
-                    detail->DevicePath,
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL,
-                    OPEN_EXISTING,
-                    FILE_FLAG_OVERLAPPED,
-                    NULL
-                );
-            }
+        if (!detail) continue;
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
+        if (!SetupDiGetDeviceInterfaceDetail(hDevInfo, &ifData, detail, reqSize, NULL, NULL)) {
             free(detail);
+            continue;
         }
+
+        HANDLE hDevice = CreateFile(
+            detail->DevicePath,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            NULL);
+        if (hDevice != INVALID_HANDLE_VALUE) {
+            HIDD_ATTRIBUTES attributes;
+            attributes.Size = sizeof(attributes);
+            BOOL match = FALSE;
+            if (HidD_GetAttributes(hDevice, &attributes) &&
+                attributes.VendorID == CSAUDIO_RT5682_HID_VID &&
+                attributes.ProductID == CSAUDIO_RT5682_HID_PID) {
+                PHIDP_PREPARSED_DATA preparsed = NULL;
+                if (HidD_GetPreparsedData(hDevice, &preparsed)) {
+                    HIDP_CAPS caps;
+                    if (HidP_GetCaps(preparsed, &caps) == HIDP_STATUS_SUCCESS &&
+                        caps.UsagePage == CSAUDIO_RT5682_HID_USAGE_PAGE &&
+                        caps.InputReportByteLength >= 3 &&
+                        caps.OutputReportByteLength >= 2) {
+                        g_JackInputLength = caps.InputReportByteLength;
+                        g_JackOutputLength = caps.OutputReportByteLength;
+                        match = TRUE;
+                    }
+                    HidD_FreePreparsedData(preparsed);
+                }
+            }
+            if (match) {
+                LogMsg(L"[SWITCHER] Connected to rt5682 jack collection: %s", detail->DevicePath);
+                found = hDevice;
+            } else {
+                CloseHandle(hDevice);
+            }
+        }
+        free(detail);
     }
 
     SetupDiDestroyDeviceInfoList(hDevInfo);
-    return hDevice;
+    return found;
 }
 
 static BOOL StopRequested() {
     return WaitForSingleObject(g_StopEvent, 0) == WAIT_OBJECT_0;
 }
 
-static void CloseNau8825Device() {
-    if (g_Nau8825Device != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_Nau8825Device);
-        g_Nau8825Device = INVALID_HANDLE_VALUE;
+static void CloseJackDevice() {
+    if (g_JackDevice != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_JackDevice);
+        g_JackDevice = INVALID_HANDLE_VALUE;
     }
 }
 
-static BOOL ConnectNau8825Device() {
+static BOOL ConnectJackDevice() {
     DWORD attempts = 0;
     while (!StopRequested()) {
-        g_Nau8825Device = OpenNau8825Device();
-        if (g_Nau8825Device != INVALID_HANDLE_VALUE) return TRUE;
+        g_JackDevice = OpenRt5682JackDevice();
+        if (g_JackDevice != INVALID_HANDLE_VALUE) return TRUE;
 
         // Avoid growing the persistent log every three seconds while drivers
         // are still being installed or the codec is temporarily unavailable.
         if ((attempts++ % 10) == 0) {
-            LogMsg(L"[SWITCHER] Waiting for NAU8825 driver interface to arrive...");
+            LogMsg(L"[SWITCHER] Waiting for the rt5682 HID jack device to arrive...");
         }
         if (WaitForSingleObject(g_StopEvent, 3000) == WAIT_OBJECT_0) return FALSE;
     }
@@ -556,8 +591,8 @@ static BOOL WaitForPendingIo(
         if (waitResult == WAIT_OBJECT_0) {
             *stopped = TRUE;
             CancelIoEx(device, overlapped);
-            // The caller's output buffer must remain alive until cancellation
-            // has completed, so drain the OVERLAPPED before returning.
+            // The caller's buffer must remain alive until cancellation has
+            // completed, so drain the OVERLAPPED before returning.
             GetOverlappedResult(device, overlapped, bytesReturned, TRUE);
             return FALSE;
         }
@@ -576,65 +611,77 @@ static BOOL WaitForPendingIo(
     }
 }
 
-static BOOL QueryJackState(CSAUDIO_JACK_STATE* state, BOOL* stopped) {
-    *stopped = FALSE;
-    DWORD bytesReturned = 0;
-    OVERLAPPED overlapped = { 0 };
-    overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    if (!overlapped.hEvent) return FALSE;
-
-    BOOL success = DeviceIoControl(
-        g_Nau8825Device,
-        IOCTL_CSAUDIO_GET_JACK_STATE,
-        NULL, 0,
-        state, sizeof(*state),
-        &bytesReturned,
-        &overlapped);
-
-    if (!success) {
-        DWORD error = GetLastError();
-        if (error == ERROR_IO_PENDING) {
-            success = WaitForPendingIo(
-                g_Nau8825Device, &overlapped, &bytesReturned, FALSE, stopped);
-        } else {
-            LogMsg(L"[SWITCHER] IOCTL_CSAUDIO_GET_JACK_STATE failed: %lu", error);
-        }
-    }
-
-    CloseHandle(overlapped.hEvent);
-    return success && bytesReturned == sizeof(*state);
+/* rt5682 reports Linux SND_JACK_* bits: headphone 0x1, microphone 0x2. */
+static CSAUDIO_JACK_STATE JackStateFromRt5682(BYTE jackType) {
+    if (jackType & CSAUDIO_RT5682_JACK_MICROPHONE) return CSAUDIO_JACK_HEADSET_4POLE;
+    if (jackType & CSAUDIO_RT5682_JACK_HEADPHONE)  return CSAUDIO_JACK_HEADPHONES_3POLE;
+    return CSAUDIO_JACK_UNPLUGGED;
 }
 
-static BOOL WaitForJackNotification(CSAUDIO_JACK_STATE* state, BOOL* stopped) {
+/*
+ * Reads input reports until a jack-type report arrives. With
+ * requestCurrent, first writes the output report that makes rt5682.sys
+ * send the current jack type; otherwise waits for the next jack change.
+ */
+static BOOL ReadJackReport(CSAUDIO_JACK_STATE* state, BOOL requestCurrent, BOOL* stopped) {
     *stopped = FALSE;
-    DWORD bytesReturned = 0;
+    BYTE* report = (BYTE*)calloc(1, g_JackInputLength);
+    if (!report) return FALSE;
+
     OVERLAPPED overlapped = { 0 };
     overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-    if (!overlapped.hEvent) return FALSE;
+    if (!overlapped.hEvent) { free(report); return FALSE; }
 
-    BOOL success = DeviceIoControl(
-        g_Nau8825Device,
-        IOCTL_CSAUDIO_REGISTER_JACK_NOTIFICATION,
-        NULL, 0,
-        state, sizeof(*state),
-        &bytesReturned,
-        &overlapped);
+    BOOL result = FALSE;
+    BOOL requested = !requestCurrent;
+    for (;;) {
+        ResetEvent(overlapped.hEvent);
+        DWORD bytesRead = 0;
+        BOOL ok = ReadFile(g_JackDevice, report, g_JackInputLength, &bytesRead, &overlapped);
+        if (!ok && GetLastError() != ERROR_IO_PENDING) {
+            LogMsg(L"[SWITCHER] Jack report read failed: %lu", GetLastError());
+            break;
+        }
 
-    if (!success) {
-        DWORD error = GetLastError();
-        if (error == ERROR_IO_PENDING) {
-            success = WaitForPendingIo(
-                g_Nau8825Device, &overlapped, &bytesReturned, TRUE, stopped);
-            if (!success && !*stopped) {
-                LogMsg(L"[SWITCHER] Jack notification completed with error: %lu", GetLastError());
+        if (!requested) {
+            // The read is already queued, so the answer cannot be missed.
+            requested = TRUE;
+            BYTE* request = (BYTE*)calloc(1, g_JackOutputLength);
+            if (request) {
+                request[0] = CSAUDIO_RT5682_REPORTID_JACK;
+                OVERLAPPED wov = { 0 };
+                wov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+                DWORD written = 0;
+                if (wov.hEvent) {
+                    if (!WriteFile(g_JackDevice, request, g_JackOutputLength, &written, &wov) &&
+                        GetLastError() == ERROR_IO_PENDING) {
+                        GetOverlappedResult(g_JackDevice, &wov, &written, TRUE);
+                    }
+                    CloseHandle(wov.hEvent);
+                }
+                free(request);
             }
-        } else {
-            LogMsg(L"[SWITCHER] IOCTL_CSAUDIO_REGISTER_JACK_NOTIFICATION failed: %lu", error);
+        }
+
+        if (!WaitForPendingIo(g_JackDevice, &overlapped, &bytesRead, !requestCurrent, stopped)) {
+            if (!*stopped) {
+                LogMsg(L"[SWITCHER] Jack report read completed with error: %lu", GetLastError());
+            }
+            break;
+        }
+
+        if (bytesRead >= 3 &&
+            report[0] == CSAUDIO_RT5682_REPORTID_JACK &&
+            report[1] == CSAUDIO_RT5682_CONTROL_JACK_TYPE) {
+            *state = JackStateFromRt5682(report[2]);
+            result = TRUE;
+            break;
         }
     }
 
     CloseHandle(overlapped.hEvent);
-    return success && bytesReturned == sizeof(*state);
+    free(report);
+    return result;
 }
 
 static PCWSTR JackStateName(CSAUDIO_JACK_STATE state) {
@@ -643,7 +690,7 @@ static PCWSTR JackStateName(CSAUDIO_JACK_STATE state) {
     case CSAUDIO_JACK_HEADPHONES_3POLE: return L"3-POLE HEADPHONES";
     case CSAUDIO_JACK_HEADSET_4POLE:    return L"4-POLE HEADSET";
     case CSAUDIO_JACK_LINE_OUT:         return L"LINE OUT";
-    default:                            return L"BUTTON/UNKNOWN";
+    default:                            return L"UNKNOWN";
     }
 }
 
@@ -663,18 +710,18 @@ static DWORD WINAPI MonitorWorkerThread(LPVOID lpParam) {
     // Reconnect forever. A codec power/PnP transition must not leave the SCM
     // service marked running while its only worker has already exited.
     while (!StopRequested()) {
-        if (!ConnectNau8825Device()) break;
+        if (!ConnectJackDevice()) break;
 
         BOOL stopped = FALSE;
         CSAUDIO_JACK_STATE currentState = CSAUDIO_JACK_UNPLUGGED;
-        if (!QueryJackState(&currentState, &stopped)) {
-            CloseNau8825Device();
+        if (!ReadJackReport(&currentState, TRUE, &stopped)) {
+            CloseJackDevice();
             if (stopped) break;
             WaitForSingleObject(g_StopEvent, 1000);
             continue;
         }
 
-        LogMsg(L"[SWITCHER] Initial NAU8825 Jack State: 0x%02X (%s)",
+        LogMsg(L"[SWITCHER] Initial rt5682 jack state: 0x%02X (%s)",
             currentState, JackStateName(currentState));
 
         // At boot, endpoint creation can lag the codec interface.
@@ -683,7 +730,7 @@ static DWORD WINAPI MonitorWorkerThread(LPVOID lpParam) {
             RefreshEndpoints();
         }
         if (StopRequested()) {
-            CloseNau8825Device();
+            CloseJackDevice();
             break;
         }
 
@@ -692,9 +739,9 @@ static DWORD WINAPI MonitorWorkerThread(LPVOID lpParam) {
         while (!StopRequested()) {
             CSAUDIO_JACK_STATE nextState = CSAUDIO_JACK_UNPLUGGED;
             stopped = FALSE;
-            if (!WaitForJackNotification(&nextState, &stopped)) {
+            if (!ReadJackReport(&nextState, FALSE, &stopped)) {
                 if (!stopped) {
-                    LogMsg(L"[SWITCHER] Codec notification channel lost; re-enumerating.");
+                    LogMsg(L"[SWITCHER] Codec HID channel lost; re-enumerating.");
                 }
                 break;
             }
@@ -705,11 +752,11 @@ static DWORD WINAPI MonitorWorkerThread(LPVOID lpParam) {
             ApplyJackState(nextState);
         }
 
-        CloseNau8825Device();
+        CloseJackDevice();
         if (!StopRequested()) WaitForSingleObject(g_StopEvent, 1000);
     }
 
-    CloseNau8825Device();
+    CloseJackDevice();
     LogMsg(L"[SWITCHER] Monitor worker thread exiting.");
     CoUninitialize();
     return 0;

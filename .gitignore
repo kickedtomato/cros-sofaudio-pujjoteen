@@ -49,3 +49,7 @@ build_errors.log
 msbuild.binlog
 /volmar-sof-test/*.log
 /volmar-sof-test.zip
+
+# Pujjoteen fork
+tools-gen/out/
+hwdump/

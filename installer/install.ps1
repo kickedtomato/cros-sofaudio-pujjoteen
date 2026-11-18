@@ -1,4 +1,4 @@
-# install.ps1 - Chromebook Audio for Windows (Intel Alder Lake + 2x MAX98373 + NAU88L25)
+# install.ps1 - Chromebook Audio for Windows (pujjoteen: Intel Alder Lake-N + MAX98360A + ALC5682I-VD)
 #
 #   -Force     install even if the hardware check fails (not recommended)
 #
@@ -63,24 +63,23 @@ Write-Host "Chromebook Audio for Windows  $version" -ForegroundColor Green
 # ------------------------------------------------------------------ hardware
 Step 'Checking hardware'
 $present = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue
-$dsp  = $present | Where-Object { $_.InstanceId -match '^PCI\\VEN_8086&DEV_(51C8|51CC)&' }
-$nau  = $present | Where-Object { $_.InstanceId -match '^ACPI\\(10508825|NVTN2000|NAU8825)\\' }
-$amps = @($present | Where-Object { $_.InstanceId -match '^ACPI\\(MX98373|MAX98373)\\' })
+$dsp   = $present | Where-Object { $_.InstanceId -match '^PCI\\VEN_8086&DEV_54C8&' }
+$codec = $present | Where-Object { $_.InstanceId -match '^ACPI\\10EC5682\\' }
+$amp   = $present | Where-Object { $_.InstanceId -match '^ACPI\\MX98360A\\' }
 
-Write-Host ("  Intel Alder Lake audio DSP : {0}" -f $(if ($dsp) { $dsp[0].InstanceId.Split('&')[1] } else { 'NOT FOUND' }))
-Write-Host ("  NAU88L25 headphone codec   : {0}" -f $(if ($nau) { 'found' } else { 'NOT FOUND' }))
-Write-Host ("  MAX98373 speaker amps      : {0}" -f $amps.Count)
+Write-Host ("  Intel Alder Lake-N audio DSP : {0}" -f $(if ($dsp) { 'found' } else { 'NOT FOUND' }))
+Write-Host ("  ALC5682I headset codec       : {0}" -f $(if ($codec) { 'found' } else { 'NOT FOUND' }))
+Write-Host ("  MAX98360A speaker amp        : {0}" -f $(if ($amp) { 'found' } else { 'NOT FOUND' }))
 
-$ok = $dsp -and $nau -and ($amps.Count -ge 1)
+$ok = $dsp -and $codec -and $amp
 if (-not $ok) {
     if (-not $Force) {
-        Fail ("This package is for Intel Alder Lake Chromebooks with a NAU88L25 headphone codec`n" +
-              "and MAX98373 speaker amps (for example the Acer Chromebook Vero 514). This laptop`n" +
-              "does not have that combination, so nothing was installed.")
+        Fail ("This package is for the Google pujjoteen Chromebook (Intel Alder Lake-N with an`n" +
+              "ALC5682I headset codec and a MAX98360A speaker amp). This laptop does not have`n" +
+              "that combination, so nothing was installed.")
     }
     Write-Warning 'Hardware check failed - continuing because -Force was given.'
 }
-if ($amps.Count -ne 2) { Write-Warning "Expected 2 speaker amps, found $($amps.Count). Speakers may play in mono." }
 
 # ------------------------------------------------------------------ test signing
 Step 'Checking driver signing mode'
@@ -138,12 +137,11 @@ foreach ($signedFile in @(
     'Drivers\SklHdaudBus\sklhdaudbus.cat',
     'Drivers\CsAudioIntcsof\CsAudioIntcsof.sys',
     'Drivers\CsAudioIntcsof\csaudiointcsof.cat',
-    'Drivers\Nau8825Audio\Nau8825Audio.sys',
-    'Drivers\Nau8825Audio\nau8825audio.cat',
-    'Drivers\Max98373Audio\Max98373Audio.sys',
-    'Drivers\Max98373Audio\max98373audio.cat',
-    'Switcher\csaudioendpointswitcher.exe',
-    'Tools\cros_audio_test.exe'
+    'Drivers\rt5682\rt5682.sys',
+    'Drivers\rt5682\rt5682.cat',
+    'Drivers\max98357a\max98357a.sys',
+    'Drivers\max98357a\max98357a.cat',
+    'Switcher\csaudioendpointswitcher.exe'
 )) {
     Test-PackageSignature (Join-Path $here $signedFile) $certificateThumbprint
 }
@@ -231,8 +229,7 @@ function Remove-SupersededDriverPackages([string[]]$originalNames) {
                 $original = [IO.Path]::GetFileName([string]$_.OriginalFileName).ToLowerInvariant()
                 $version = try { [version]$_.Version } catch { [version]'0.0.0.0' }
                 $original -eq $wantedName -and
-                    $projectProviders -contains $_.ProviderName -and
-                    $version.Major -eq 18
+                    $projectProviders -contains $_.ProviderName
             }
         )
         if ($packages.Count -le 1) { continue }
@@ -269,39 +266,56 @@ function Remove-SupersededDriverPackages([string[]]$originalNames) {
     pnputil.exe /scan-devices | Out-Null
 }
 
-# ------------------------------------------------------------------ bus driver
-Step 'Intel audio bus driver'
-$child = $present | Where-Object { $_.InstanceId -like 'CSAUDIO\ADSP*' }
-if ($child) {
-    Write-Host '  An audio bus driver is already working on this laptop - keeping it.'
-} elseif (Test-Path (Join-Path $here 'Drivers\SklHdaudBus\sklhdaudbus.inf')) {
-    Install-Inf 'Drivers\SklHdaudBus\sklhdaudbus.inf'
-    Set-ItemProperty -Path $regRoot -Name 'InstalledBusDriver' -Value 1 -Type DWord
-    pnputil /scan-devices | Out-Null
-} else {
-    Write-Warning 'No audio bus driver is present and this package does not contain one.'
+function Remove-ConflictingDspDrivers {
+    # Other SOF drivers for the same CSAUDIO\ADSP device (for example the
+    # earlier pujjoteen bring-up driver, original name sofaudio.inf) would
+    # compete with csaudiointcsof.inf for the DSP, so remove their packages.
+    $text = (pnputil /enum-drivers) -join "`n"
+    foreach ($block in ($text -split "(\r?\n){2,}")) {
+        if ($block -match 'Original Name:\s+sofaudio\.inf' -and
+            $block -match 'Published Name:\s+(oem\d+\.inf)') {
+            $published = $Matches[1]
+            Write-Host "  Removing the earlier bring-up DSP driver $published (sofaudio.inf)..."
+            $out = & pnputil.exe /delete-driver $published /uninstall /force 2>&1
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+                $out | Out-Host
+                Write-Warning "Could not remove $published (code $LASTEXITCODE)."
+            }
+        }
+    }
 }
+
+# ------------------------------------------------------------------ bus driver
+# Always install this package's bus driver: the DSP driver is built and tested
+# against it (another sklhdaudbus build may expose a different bus interface).
+Step 'Intel audio bus driver'
+Install-Inf 'Drivers\SklHdaudBus\sklhdaudbus.inf'
+Set-ItemProperty -Path $regRoot -Name 'InstalledBusDriver' -Value 1 -Type DWord
+pnputil /scan-devices | Out-Null
 
 # ------------------------------------------------------------------ audio drivers
 Step 'Audio drivers'
 foreach ($k in 'DspBoot', 'DspIpc', 'DspDiag', 'Codec', 'AmpLeft', 'AmpRight', 'Amp0', 'Amp1') {
     if (Test-Path "$regRoot\$k") { Remove-Item "$regRoot\$k" -Recurse -Force }
 }
+# Settings that only applied to volmar's MAX98373 / NAU88L25 drivers.
+foreach ($n in 'JackActiveLow', 'SpeakerLimiterThresholdDb') {
+    Remove-ItemProperty -Path $regRoot -Name $n -ErrorAction SilentlyContinue
+}
 reg add HKLM\SOFTWARE\CrosSofAudio\DspBoot /f | Out-Null
-# Volmar's JKDET signal is active-low. Keep approximately 80% speaker
-# amplitude (-2 dB) and match the hardware limiter to that headroom.
-Set-ItemProperty -Path $regRoot -Name 'JackActiveLow' -Value 1 -Type DWord
+# The MAX98360A has no volume control of its own; keep ~80 % speaker
+# amplitude (-2 dB) in the DSP so loud content does not clip.
 Set-ItemProperty -Path $regRoot -Name 'SpeakerDspAttenDb' -Value 2 -Type DWord
-Set-ItemProperty -Path $regRoot -Name 'SpeakerLimiterThresholdDb' -Value 2 -Type DWord
+Remove-ConflictingDspDrivers
 Install-Inf 'Drivers\CsAudioIntcsof\csaudiointcsof.inf'
-Install-Inf 'Drivers\Nau8825Audio\Nau8825Audio.inf'
-Install-Inf 'Drivers\Max98373Audio\Max98373Audio.inf'
+Install-Inf 'Drivers\rt5682\rt5682.inf'
+Install-Inf 'Drivers\max98357a\max98357a.inf'
 
 Step 'Cleaning superseded driver packages'
 Remove-SupersededDriverPackages @(
     'csaudiointcsof.inf',
-    'Nau8825Audio.inf',
-    'Max98373Audio.inf',
+    'rt5682.inf',
+    'max98357a.inf',
     'sklhdaudbus.inf'
 )
 
@@ -339,10 +353,16 @@ if (Test-Path $exeSrc) {
 
 # ------------------------------------------------------------------ check
 Step 'Result'
-$amp = Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'MAX98373' }
-foreach ($a in $amp) { Write-Host "  Speaker amp driver : $($a.DriverVersion)" }
-$cod = Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'NAU88L25' }
-foreach ($c in $cod) { Write-Host "  Headphone codec    : $($c.DriverVersion)" }
+$drivers = Get-CimInstance Win32_PnPSignedDriver
+foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^ACPI\\MX98360A\\' })) {
+    Write-Host "  Speaker amp driver : $($d.DriverVersion) ($($d.InfName))"
+}
+foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^ACPI\\10EC5682\\' })) {
+    Write-Host "  Headset codec      : $($d.DriverVersion) ($($d.InfName))"
+}
+foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^CSAUDIO\\ADSP' })) {
+    Write-Host "  SOF DSP driver     : $($d.DriverVersion) ($($d.InfName))"
+}
 
 Write-Host "`nDone. REBOOT the laptop to start the new drivers." -ForegroundColor Green
 Write-Host 'Volume tuning and troubleshooting: see README.txt.'

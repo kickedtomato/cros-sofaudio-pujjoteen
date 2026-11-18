@@ -232,7 +232,7 @@ static const SOF_PATH_DESC c_PathDesc[SOF_PATH_COUNT] = {
       BLOB(c_SofSpkDaiHwParams), BLOB(c_SofSpkDaiHwFree), BLOB(c_SofSpkPcmParams),
       BLOB(c_SofSpkTrigStart), BLOB(c_SofSpkTrigStop), BLOB(c_SofSpkPcmFree) },
     /* SOF_PATH_HP */
-    { L"Hp", L"HeadphoneDspAttenDb", 20, SOF_HP_VOL_MSG_INDEX, "SSP0", 0, FALSE, TRUE, L"SUCCESS: headset pipeline 2 (PCM1P -> volume -> SSP0) created",
+    { L"Hp", L"HeadphoneDspAttenDb", 10, SOF_HP_VOL_MSG_INDEX, "SSP0", 0, FALSE, TRUE, L"SUCCESS: headset pipeline 2 (PCM1P -> volume -> SSP0) created",
       c_SofHpSetup, ARRAYSIZE(c_SofHpSetup),
       BLOB(c_SofHpDaiHwParams), BLOB(c_SofHpDaiHwFree), BLOB(c_SofHpPcmParams),
       BLOB(c_SofHpTrigStart), BLOB(c_SofHpTrigStop), BLOB(c_SofHpPcmFree) },

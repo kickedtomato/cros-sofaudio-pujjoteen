@@ -8,7 +8,9 @@ Abstract:
 
     Declaration of Intel Sound Open Firmware (SOF) Audio Hardware Interface class.
     Manages ADSP_BUS_INTERFACE bus communication with SklHdaudBus,
-    cyclic DMA stream allocations, and sidecar codec control (MAX98373 & NAU88L25).
+    cyclic DMA stream allocations, and codec control through CoolStar's
+    \Callback\CsAudioCallbackAPI (rt5682.sys for the ALC5682I-VD headset
+    codec, max98357a.sys for the MAX98360A speaker amp).
 
 --*/
 
@@ -59,18 +61,10 @@ public:
 private:
     PCALLBACK_OBJECT            m_CsAudioAPICallback;
     PVOID                       m_CsAudioAPICallbackObj;
-    PVOID                       m_pnpNotificationHandle;
-
-    // Sidecar Device Objects (MAX98373 smart amp & NAU88L25 headset codec)
-    PFILE_OBJECT                m_SpeakerFileObject;
-    PDEVICE_OBJECT              m_SpeakerDeviceObject;
-    PFILE_OBJECT                m_HeadphoneFileObject;
-    PDEVICE_OBJECT              m_HeadphoneDeviceObject;
 
     NTSTATUS CSAudioAPIInit();
     NTSTATUS CSAudioAPIDeinit();
-    NTSTATUS NotifySidecarCodec(CSAudioEndpointType endpoint, BOOL start);
-    void     SendSidecarVolume(CSAudioEndpointType endpoint, LONG volumeLevel, BOOL muted);
+    void     SendI2SParameters(_In_ CSAudioEndpointType endpointType);
 
     CSAudioEndpointType GetCSAudioEndpoint(eDeviceType deviceType);
     eDeviceType         GetDeviceType(CSAudioEndpointType endpointType);
@@ -92,9 +86,9 @@ protected:
     BUS_INTERFACE_STANDARD      m_pciConfig;
 
     // One host DMA stream + one DSP pipeline per physical audio path.
-    //   SOF_PATH_SPK: speaker endpoint  -> pipeline 1 -> SSP1 -> 2x MAX98373
-    //   SOF_PATH_HP : headphone endpoint -> pipeline 2 -> SSP0 -> NAU88L25
-    //   SOF_PATH_MICJACK: NAU88L25 ADC -> SSP0 -> pipeline 3 -> headset mic
+    //   SOF_PATH_SPK: speaker endpoint  -> pipeline 1 -> SSP1 -> MAX98360A
+    //   SOF_PATH_HP : headphone endpoint -> pipeline 2 -> SSP0 -> ALC5682I-VD
+    //   SOF_PATH_MICJACK: ALC5682I-VD ADC -> SSP0 -> pipeline 3 -> headset mic
     //   SOF_PATH_DMIC: internal PDM array -> DMIC0 -> pipeline 4 -> mic array
     SOF_RENDER_PATH             m_path[SOF_PATH_COUNT];
 

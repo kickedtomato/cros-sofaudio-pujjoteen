@@ -7,7 +7,12 @@ Module Name:
 Abstract:
 
     Boots Sound Open Firmware (SOF, IPC3) on the Intel cAVS 2.5 audio DSP
-    found in Alder Lake Chromebooks (e.g. Acer Chromebook Vero 514 "volmar").
+    found in Alder Lake-N Chromebooks (Google "pujjoteen", Intel N100).
+
+    The firmware is the Intel-signed sof-adl-n.ri from sof-bin v2.2.x
+    (sof-v2.2/intel-signed). Linux's ADL-N descriptor (pci-tgl.c adln_desc)
+    boots the same image with the TGL-family (cAVS 2.5) ICCMAX sequence used
+    below, so only the platform check and file name differ from Alder Lake-P.
 
     The sequence follows the Linux kernel SOF driver:
       sound/soc/sof/intel/hda-loader.c  (cl_dsp_init, hda_cl_copy_fw,
@@ -40,7 +45,7 @@ extern "C" NTKERNELAPI PHYSICAL_ADDRESS MmGetPhysicalAddress(_In_ PVOID BaseAddr
 #define SOF_POOLTAG                 'BfoS'
 #define SOF_REG_ROOT                L"\\Registry\\Machine\\SOFTWARE\\CrosSofAudio"
 #define SOF_REG_LOG                 L"\\Registry\\Machine\\SOFTWARE\\CrosSofAudio\\DspBoot"
-#define SOF_FW_PATH_ADL             L"\\SystemRoot\\System32\\drivers\\sof-adl.ri"
+#define SOF_FW_PATH_ADLN            L"\\SystemRoot\\System32\\drivers\\sof-adl-n.ri"
 #define SOF_MAX_FW_SIZE             (4 * 1024 * 1024)
 #define SOF_BDL_CHUNK               4096
 #define SOF_BDL_MAX_ENTRIES         256     /* bus allocates a 4 KiB BDL = 256 entries */
@@ -348,8 +353,8 @@ static int SofFillBdl(_In_ PVOID bdlBuf, _In_ PVOID buffer, _In_ ULONG size)
 BOOLEAN CCsAudioSofHW::sof_is_supported_platform()
 {
     switch (m_BusInterface.CtlrDevId) {
-    case 0x51C8:    /* Alder Lake-P (volmar) */
-    case 0x51CC:    /* Alder Lake-M */
+    case 0x54C8:    /* Alder Lake-N (pujjoteen). The pipelines in
+                     * sof_*_pipeline.h are built for this board only. */
         return TRUE;
     default:
         return FALSE;
@@ -398,7 +403,7 @@ NTSTATUS CCsAudioSofHW::sof_boot_dsp()
     SofLogString(L"Result", L"running");
 
     if (!sof_is_supported_platform()) {
-        SofLogString(L"Result", L"skipped: controller is not Alder Lake-P/M");
+        SofLogString(L"Result", L"skipped: controller is not Alder Lake-N (54C8)");
         sof_log_stage(SofStageSkipped, STATUS_NOT_SUPPORTED);
         return STATUS_NOT_SUPPORTED;
     }
@@ -423,9 +428,9 @@ NTSTATUS CCsAudioSofHW::sof_boot_dsp()
 
     /* ---- 1. Load firmware image ------------------------------------ */
     sof_log_stage(SofStageLoadFile, STATUS_PENDING);
-    status = SofLoadFile(SOF_FW_PATH_ADL, &fwFile, &fwFileSize);
+    status = SofLoadFile(SOF_FW_PATH_ADLN, &fwFile, &fwFileSize);
     if (!NT_SUCCESS(status)) {
-        SofLogString(L"Result", L"failed: cannot read System32\\drivers\\sof-adl.ri");
+        SofLogString(L"Result", L"failed: cannot read System32\\drivers\\sof-adl-n.ri");
         sof_log_stage(SofStageLoadFile, status);
         goto cleanup;
     }
@@ -441,7 +446,7 @@ NTSTATUS CCsAudioSofHW::sof_boot_dsp()
         }
         if (payloadOffset >= fwFileSize) {
             status = STATUS_INVALID_IMAGE_FORMAT;
-            SofLogString(L"Result", L"failed: bad extended manifest in sof-adl.ri");
+            SofLogString(L"Result", L"failed: bad extended manifest in sof-adl-n.ri");
             sof_log_stage(SofStageLoadFile, status);
             goto cleanup;
         }

@@ -12,22 +12,27 @@ if ($svc) {
 }
 if (Test-Path $progDir) { Remove-Item $progDir -Recurse -Force -ErrorAction SilentlyContinue }
 
-$names = @('csaudiointcsof', 'nau8825audio', 'max98373audio')
+# Original INF name -> provider that identifies this project's package.
+$names = [ordered]@{
+    'csaudiointcsof' = 'The Scape Network'
+    'rt5682'         = 'CoolStar'
+    'max98357a'      = 'CoolStar'
+}
 $busInstalled = (Get-ItemProperty -Path $regRoot -Name 'InstalledBusDriver' -ErrorAction SilentlyContinue).InstalledBusDriver -eq 1
-if ($busInstalled) { $names += 'sklhdaudbus' }
+if ($busInstalled) { $names['sklhdaudbus'] = 'CoolStar|The Scape Network' }
 
 $text = (pnputil /enum-drivers) -join "`n"
 $blocks = $text -split "(\r?\n){2,}"
 $targets = @()
 foreach ($b in $blocks) {
-    foreach ($n in $names) {
-        if ($b -match "Original Name:\s+$n\.inf" -and $b -match '18\.[23]\.\d+\.\d+') {
+    foreach ($n in $names.Keys) {
+        if ($b -match "Original Name:\s+$n\.inf" -and $b -match "Provider Name:\s+($($names[$n]))\s*(\r?\n|$)") {
             if ($b -match 'Published Name:\s+(oem\d+\.inf)') { $targets += $Matches[1] }
         }
     }
 }
 if (-not $targets) {
-    Write-Host 'No Chromebook Audio driver packages (18.2.x / 18.3.x) found.'
+    Write-Host 'No Chromebook Audio driver packages found.'
     Write-Host 'If Windows is not in English, use Device Manager -> Uninstall device instead.'
 } else {
     foreach ($t in $targets) {
