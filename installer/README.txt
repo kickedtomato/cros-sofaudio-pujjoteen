@@ -21,6 +21,20 @@ Install
   playback to Headphones when you plug in and back to Speakers when you
   unplug.
 
+Plugging something into the 3.5 mm jack
+  The codec detects the plug's wiring: 3-pole (headphones, line out) or
+  4-pole (headset with a microphone contact). The auto-switcher routes from
+  that at once, and a small dialog then asks what you plugged in:
+    Headphones or line out  sound on the jack, built-in microphones
+    Headset                 sound and microphone on the jack
+    Microphone only         sound on the built-in speakers, microphone on
+                            the jack
+  Microphones need a 4-pole (TRRS, CTIA) plug; a 3-pole microphone plug
+  cannot be recorded on this jack, so those choices are greyed out for a
+  3-pole plug. Line-out devices use the Headphones output (same jack).
+  "Don't ask again" turns the dialog off; turn it back on with
+    "C:\Program Files\CrosSofAudio\csaudiojackprompt.exe" /enable
+
 What it contains
   Drivers\SklHdaudBus     Intel audio bus driver (CoolStar sklhdaudbus, as
                           modified by cros-sofaudio)
@@ -29,7 +43,8 @@ What it contains
                           headset-mic (SSP0) and internal-mic (DMIC0) pipelines
   Drivers\rt5682          ALC5682I-VD headset codec + jack detection (CoolStar)
   Drivers\max98357a       MAX98360A speaker amp enable (CoolStar)
-  Switcher\               auto-switch service (csaudioswitcher)
+  Switcher\               auto-switch service (csaudioswitcher) and the
+                          plug-in dialog (csaudiojackprompt.exe)
 
 Volume tuning (registry, HKLM\SOFTWARE\CrosSofAudio, DWORD; reboot after)
   SpeakerDspAttenDb       speaker attenuation in dB, default 2 (~79% amplitude)

@@ -10,6 +10,10 @@ if ($svc) {
     Stop-Service $svcName -Force -ErrorAction SilentlyContinue
     sc.exe delete $svcName | Out-Null
 }
+Write-Host 'Removing the plug-in dialog...'
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
+                    -Name 'CrosSofAudioJackPrompt' -ErrorAction SilentlyContinue
+Get-Process -Name 'csaudiojackprompt' -ErrorAction SilentlyContinue | Stop-Process -Force
 if (Test-Path $progDir) { Remove-Item $progDir -Recurse -Force -ErrorAction SilentlyContinue }
 
 # Original INF name -> provider that identifies this project's package.

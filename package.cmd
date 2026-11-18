@@ -34,7 +34,7 @@ set "SIGN_PATHS="
 for %%d in (%PACKAGES%) do (
     for %%f in ("%OUT_DIR%\%%d\*.sys" "%OUT_DIR%\%%d\*.cat") do set "SIGN_PATHS=!SIGN_PATHS!%%~ff;"
 )
-set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe"
+set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe;%OUT_DIR%\csaudiojackprompt.exe"
 
 echo [INFO] Verifying package signatures and signer certificate...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Test-DriverSignatures.ps1" ^
@@ -56,6 +56,7 @@ for %%d in (%PACKAGES%) do (
 echo [INFO] Copying endpoint switcher service...
 mkdir "%DIST_DIR%\Switcher"
 copy /y "%OUT_DIR%\csaudioendpointswitcher.exe" "%DIST_DIR%\Switcher\" >nul
+copy /y "%OUT_DIR%\csaudiojackprompt.exe" "%DIST_DIR%\Switcher\" >nul
 
 echo [INFO] Copying installer scripts, documentation and licences...
 for %%f in (Install.cmd install.ps1 Uninstall.cmd uninstall.ps1 Collect-Logs.cmd README.txt) do (

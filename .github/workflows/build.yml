@@ -191,7 +191,8 @@ jobs:
               'x64\Release\SklHdaudBus\sklhdaudbus.cat',
               'x64\Release\CsAudioIntcsof\CsAudioIntcsof.sys',
               'x64\Release\CsAudioIntcsof\csaudiointcsof.cat',
-              'x64\Release\csaudioendpointswitcher.exe'
+              'x64\Release\csaudioendpointswitcher.exe',
+              'x64\Release\csaudiojackprompt.exe'
           ) | ForEach-Object { Join-Path $env:GITHUB_WORKSPACE $_ }
 
           & .\build-tools\Test-DriverSignatures.ps1 `
@@ -228,6 +229,7 @@ jobs:
               'README.txt', 'LICENSE.txt', 'LICENCE.sof-firmware.txt', 'VERSION.txt',
               'LICENSE.rt5682.txt', 'LICENSE.max98357a.txt',
               'Switcher\csaudioendpointswitcher.exe',
+              'Switcher\csaudiojackprompt.exe',
               'Drivers\SklHdaudBus\sklhdaudbus.inf',
               'Drivers\SklHdaudBus\SklHdaudBus.sys',
               'Drivers\SklHdaudBus\sklhdaudbus.cat',

@@ -141,7 +141,8 @@ foreach ($signedFile in @(
     'Drivers\rt5682\rt5682.cat',
     'Drivers\max98357a\max98357a.sys',
     'Drivers\max98357a\max98357a.cat',
-    'Switcher\csaudioendpointswitcher.exe'
+    'Switcher\csaudioendpointswitcher.exe',
+    'Switcher\csaudiojackprompt.exe'
 )) {
     Test-PackageSignature (Join-Path $here $signedFile) $certificateThumbprint
 }
@@ -332,6 +333,15 @@ if (Test-Path $exeSrc) {
     }
     New-Item -ItemType Directory -Force $progDir | Out-Null
     Copy-Item $exeSrc $progDir -Force
+
+    # Plug-in dialog: runs in each signed-in user's session (the service has no
+    # desktop), started at sign-in. Stop running copies so the file can be replaced.
+    Get-Process -Name 'csaudiojackprompt' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Copy-Item (Join-Path $here 'Switcher\csaudiojackprompt.exe') $progDir -Force
+    $promptExe = Join-Path $progDir 'csaudiojackprompt.exe'
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
+                     -Name 'CrosSofAudioJackPrompt' -Value "`"$promptExe`"" -Type String
+    Write-Host "  plug-in dialog starts at sign-in ($promptExe)"
     $exe = Join-Path $progDir 'csaudioendpointswitcher.exe'
     if ($svc) {
         sc.exe config $svcName binPath= "`"$exe`"" start= auto | Out-Null

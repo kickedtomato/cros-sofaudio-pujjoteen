@@ -7,6 +7,7 @@ setlocal EnableDelayedExpansion
 ::   rt5682          ALC5682I-VD headset codec      ACPI\10EC5682
 ::   max98357a       MAX98360A speaker amp          ACPI\MX98360A
 ::   csaudioendpointswitcher.exe (jack -> default endpoint service)
+::   csaudiojackprompt.exe       (asks the plugged-in device type, user session)
 ::
 :: Signing certificate: SIGN_CERT_SHA1 if set, otherwise the
 :: "CN=audiodriver test signing" certificate from CurrentUser\My or
@@ -147,7 +148,7 @@ set "SIGN_PATHS="
 for %%d in (%PACKAGES%) do (
     for %%f in ("%OUT_DIR%\%%d\*.sys" "%OUT_DIR%\%%d\*.cat") do set "SIGN_PATHS=!SIGN_PATHS!%%~ff;"
 )
-set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe"
+set "SIGN_PATHS=!SIGN_PATHS!%OUT_DIR%\csaudioendpointswitcher.exe;%OUT_DIR%\csaudiojackprompt.exe"
 
 echo [INFO] Signing with certificate !RESOLVED_SIGN_CERT_SHA1!...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT_DIR%build-tools\Sign-BuildOutputs.ps1" ^
