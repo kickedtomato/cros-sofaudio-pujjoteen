@@ -88,7 +88,11 @@ Write-Host "Chromebook Audio for Windows  $version" -ForegroundColor Green
 
 # ------------------------------------------------------------------ hardware
 Step 'Checking hardware'
-$present = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue
+# Rescan first, and also accept devices Windows knows but that are not present
+# right now: after an uninstall the amp and DSP device nodes stay removed until
+# the next reboot, but their IDs come from this laptop's ACPI firmware.
+pnputil.exe /scan-devices | Out-Null
+$present = Get-PnpDevice -ErrorAction SilentlyContinue
 $dsp   = $present | Where-Object { $_.InstanceId -match '^PCI\\VEN_8086&DEV_54C8&' }
 $codec = $present | Where-Object { $_.InstanceId -match '^ACPI\\10EC5682\\' }
 $amp   = $present | Where-Object { $_.InstanceId -match '^ACPI\\MX98360A\\' }

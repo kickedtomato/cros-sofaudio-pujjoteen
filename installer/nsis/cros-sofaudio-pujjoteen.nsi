@@ -93,9 +93,15 @@ Section "Install"
   SetOutPath "$INSTDIR\Package"
   File /r "${DISTDIR}\*.*"
 
-  DetailPrint "Running the driver installer..."
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Package\install.ps1" -Unattended'
+  ; The setup is a 32-bit process: without this, $SYSDIR paths are redirected
+  ; to SysWOW64, starting 32-bit PowerShell, which cannot see pnputil.exe or
+  ; bcdedit.exe (both exist only as 64-bit).
+  ${DisableX64FSRedirection}
+
+  DetailPrint "Running the driver installer (log: $INSTDIR\Package\install.log)..."
+  nsExec::ExecToLog `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "& '$INSTDIR\Package\install.ps1' -Unattended *>&1 | Tee-Object -FilePath '$INSTDIR\Package\install.log'; exit $$LASTEXITCODE"`
   Pop $0
+  DetailPrint "install.ps1 exit code: $0"
 
   ${If} $0 == 2
     ; Test-signed package and Windows is not in Test Mode.
@@ -122,6 +128,7 @@ Section "Install"
     Abort "Driver installation failed."
   ${EndIf}
 
+  ${EnableX64FSRedirection}
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr   HKLM "${UNINSTKEY}" "DisplayName"          "${APPNAME}"
   WriteRegStr   HKLM "${UNINSTKEY}" "DisplayVersion"       "${VERSION}"
@@ -139,6 +146,8 @@ SectionEnd
 Section "Uninstall"
   SetShellVarContext all
   InitPluginsDir
+  ; 64-bit PowerShell, so uninstall.ps1 can run pnputil (see the install section).
+  ${DisableX64FSRedirection}
   DetailPrint "Removing the drivers, the switcher service and the plug-in dialog..."
   ${If} ${FileExists} "$INSTDIR\Package\uninstall.ps1"
     ; uninstall.ps1 deletes %ProgramFiles%\CrosSofAudio, so copy it out first.
