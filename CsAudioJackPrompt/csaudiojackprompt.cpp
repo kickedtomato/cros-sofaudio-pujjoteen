@@ -255,27 +255,63 @@ typedef struct _PROMPT_CONTEXT {
     BOOL micContact;    /* 4-pole plug detected */
 } PROMPT_CONTEXT;
 
+static void KeepTopmost(HWND hwnd) {
+    if (!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
 static HRESULT CALLBACK PromptCallback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LONG_PTR refData) {
     UNREFERENCED_PARAMETER(wParam);
     UNREFERENCED_PARAMETER(lParam);
     PROMPT_CONTEXT* ctx = (PROMPT_CONTEXT*)refData;
 
     switch (msg) {
+    case TDN_DIALOG_CONSTRUCTED:
+        KeepTopmost(hwnd);
+        break;
     case TDN_CREATED:
         g_Dialog = hwnd;
         if (!ctx->micContact) {
             SendMessageW(hwnd, TDM_ENABLE_RADIO_BUTTON, CHOICE_HEADSET, FALSE);
             SendMessageW(hwnd, TDM_ENABLE_RADIO_BUTTON, CHOICE_MIC_ONLY, FALSE);
         }
-        /* Started from the Run key, the app may not own the foreground. */
+        /* The task dialog re-orders itself while it is shown, which can drop
+         * the topmost flag set above, so set it again once it is on screen. */
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        /* Started from the Run key, the app may not own the foreground;
+         * Windows may refuse focus, but the dialog stays above other windows. */
         SetForegroundWindow(hwnd);
+        break;
+    case TDN_TIMER:
+        /* Re-assert topmost (about 5x a second) in case another app or the
+         * shell pushes the dialog back. */
+        KeepTopmost(hwnd);
         break;
     case TDN_DESTROYED:
         g_Dialog = NULL;
         break;
     }
     return S_OK;
+}
+
+/*
+ * Hidden topmost owner for the dialog, centred on the primary work area.
+ * An owned window always stays above its owner, so with a topmost owner
+ * the dialog is topmost too, and TDF_POSITION_RELATIVE_TO_WINDOW centres
+ * the dialog on the screen.
+ */
+static HWND CreateTopmostOwner(HINSTANCE hInstance) {
+    RECT work;
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+        SetRect(&work, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    }
+    HWND owner = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                 L"STATIC", L"", WS_POPUP,
+                                 (work.left + work.right) / 2, (work.top + work.bottom) / 2, 0, 0,
+                                 NULL, NULL, hInstance, NULL);
+    if (owner) ShowWindow(owner, SW_SHOWNOACTIVATE);
+    return owner;
 }
 
 static void ShowPrompt(UINT state) {
@@ -289,10 +325,13 @@ static void ShowPrompt(UINT state) {
         { CHOICE_MIC_ONLY,   L"Microphone only\nSound stays on the built-in speakers; recording uses the jack." },
     };
 
+    HWND owner = CreateTopmostOwner((HINSTANCE)GetModuleHandleW(NULL));
+
     TASKDIALOGCONFIG cfg;
     ZeroMemory(&cfg, sizeof(cfg));
     cfg.cbSize = sizeof(cfg);
-    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    cfg.hwndParent = owner;
+    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_CALLBACK_TIMER;
     cfg.dwCommonButtons = TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON;
     cfg.pszWindowTitle = L"Chromebook Audio";
     cfg.pszMainIcon = TD_INFORMATION_ICON;
@@ -311,7 +350,9 @@ static void ShowPrompt(UINT state) {
 
     int button = 0, radio = 0;
     BOOL dontAsk = FALSE;
-    if (FAILED(TaskDialogIndirect(&cfg, &button, &radio, &dontAsk))) return;
+    HRESULT hr = TaskDialogIndirect(&cfg, &button, &radio, &dontAsk);
+    if (owner) DestroyWindow(owner);
+    if (FAILED(hr)) { LogMsg(L"TaskDialogIndirect failed (0x%08X).", hr); return; }
 
     LogMsg(L"Dialog closed: button %d, choice %d, don't ask again %d.", button, radio, dontAsk);
     if (dontAsk) SetAskOnPlug(FALSE);
