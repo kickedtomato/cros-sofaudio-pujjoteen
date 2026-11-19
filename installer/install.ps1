@@ -96,10 +96,51 @@ $present = Get-PnpDevice -ErrorAction SilentlyContinue
 $dsp   = $present | Where-Object { $_.InstanceId -match '^PCI\\VEN_8086&DEV_54C8&' }
 $codec = $present | Where-Object { $_.InstanceId -match '^ACPI\\10EC5682\\' }
 $amp   = $present | Where-Object { $_.InstanceId -match '^ACPI\\MX98360A\\' }
+$ampWhere = 'found'
+
+# The amp is an ACPI child of the DSP's PCI device (\_SB.PCI0.HDAS), so Windows
+# only lists it once the DSP has a driver (the bus driver installed below). On
+# a clean laptop the DSP shows Code 28 and the amp is not listed yet: look for
+# its ID in the firmware's ACPI tables instead.
+function Test-AcpiTablesContain([string]$Text) {
+    if (-not ('CrosSofAudio.FirmwareTables' -as [type])) {
+        Add-Type -Namespace CrosSofAudio -Name FirmwareTables -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern uint EnumSystemFirmwareTables(uint provider, byte[] buffer, uint size);
+[DllImport("kernel32.dll")] public static extern uint GetSystemFirmwareTable(uint provider, uint id, byte[] buffer, uint size);
+'@
+    }
+    $acpi = [uint32]0x41435049   # 'ACPI'
+    $n = [CrosSofAudio.FirmwareTables]::EnumSystemFirmwareTables($acpi, $null, 0)
+    if ($n -eq 0) { return $false }
+    $ids = New-Object byte[] $n
+    [void][CrosSofAudio.FirmwareTables]::EnumSystemFirmwareTables($acpi, $ids, $n)
+    $seen = @{}
+    for ($i = 0; $i -lt $n; $i += 4) {
+        $id = [BitConverter]::ToUInt32($ids, $i)
+        if ($seen.ContainsKey($id)) { continue }
+        $seen[$id] = $true
+        $size = [CrosSofAudio.FirmwareTables]::GetSystemFirmwareTable($acpi, $id, $null, 0)
+        if ($size -eq 0) { continue }
+        $table = New-Object byte[] $size
+        [void][CrosSofAudio.FirmwareTables]::GetSystemFirmwareTable($acpi, $id, $table, $size)
+        if ([Text.Encoding]::ASCII.GetString($table).Contains($Text)) { return $true }
+    }
+    return $false
+}
+if (-not $amp) {
+    try {
+        if (Test-AcpiTablesContain 'MX98360A') {
+            $amp = $true
+            $ampWhere = 'found in ACPI tables (listed after the bus driver starts)'
+        }
+    } catch {
+        Write-Warning "Could not read the ACPI tables: $($_.Exception.Message)"
+    }
+}
 
 Write-Host ("  Intel Alder Lake-N audio DSP : {0}" -f $(if ($dsp) { 'found' } else { 'NOT FOUND' }))
 Write-Host ("  ALC5682I headset codec       : {0}" -f $(if ($codec) { 'found' } else { 'NOT FOUND' }))
-Write-Host ("  MAX98360A speaker amp        : {0}" -f $(if ($amp) { 'found' } else { 'NOT FOUND' }))
+Write-Host ("  MAX98360A speaker amp        : {0}" -f $(if ($amp) { $ampWhere } else { 'NOT FOUND' }))
 
 $ok = $dsp -and $codec -and $amp
 if (-not $ok) {
