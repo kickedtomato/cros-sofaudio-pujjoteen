@@ -1,5 +1,9 @@
 @echo off
 setlocal EnableDelayedExpansion
+:: Started from PowerShell 7 (as in GitHub Actions), PSModulePath lists the
+:: PowerShell 7 modules, and the Windows PowerShell 5.1 helpers below then fail
+:: to load their Certificate provider. Empty, 5.1 uses its own defaults.
+set "PSModulePath="
 
 :: Builds, catalogs and test-signs the pujjoteen driver set:
 ::   SklHdaudBus     Intel HDA / audio DSP bus      PCI\VEN_8086&DEV_54C8
