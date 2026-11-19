@@ -133,35 +133,53 @@ jobs:
           "### Toolchain`n- Runner: windows-2022`n- Visual Studio: $vsPath`n- SDK/WDK: $kitVersion`n- KMDF: 1.33" |
               Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      - name: Build, generate catalogs, sign, and verify
-        id: signing
+      - name: Prepare signing certificate
+        id: cert
         shell: pwsh
         env:
           DRIVER_SIGNING_PFX_BASE64: ${{ secrets.DRIVER_SIGNING_PFX_BASE64 }}
           DRIVER_SIGNING_PFX_PASSWORD: ${{ secrets.DRIVER_SIGNING_PFX_PASSWORD }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
+          # With the DRIVER_SIGNING_PFX_* secrets, sign with that certificate, so
+          # releases keep one signer across builds. Without them, sign with a
+          # throwaway self-signed certificate made on this runner: the build still
+          # compiles and is verified, but each run has a different signer, so
+          # releases (tags / publish_release) require the secrets.
+          $isRelease = $env:GITHUB_REF_TYPE -eq 'tag' -or $env:PUBLISH_RELEASE -eq 'true'
           if ([string]::IsNullOrWhiteSpace($env:DRIVER_SIGNING_PFX_BASE64)) {
-              throw 'Repository secret DRIVER_SIGNING_PFX_BASE64 is not configured.'
-          }
-          if ([string]::IsNullOrEmpty($env:DRIVER_SIGNING_PFX_PASSWORD)) {
-              throw 'Repository secret DRIVER_SIGNING_PFX_PASSWORD is not configured.'
-          }
-
-          $pfxPath = Join-Path $env:RUNNER_TEMP 'cros-sofaudio-signing.pfx'
-          try {
-              $base64 = $env:DRIVER_SIGNING_PFX_BASE64 -replace '\s', ''
-              [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($base64))
-              $env:SIGN_CERT_PFX_PATH = $pfxPath
-              $env:SIGN_CERT_PFX_PASSWORD = $env:DRIVER_SIGNING_PFX_PASSWORD
-
-              & cmd.exe /d /c build.cmd
-              if ($LASTEXITCODE -ne 0) {
-                  throw "build.cmd failed with exit code $LASTEXITCODE"
+              if ($isRelease) {
+                  throw 'Releases need the DRIVER_SIGNING_PFX_BASE64 and DRIVER_SIGNING_PFX_PASSWORD repository secrets.'
               }
-          } finally {
-              Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
-              Remove-Item Env:SIGN_CERT_PFX_PATH -ErrorAction SilentlyContinue
-              Remove-Item Env:SIGN_CERT_PFX_PASSWORD -ErrorAction SilentlyContinue
+              Write-Warning 'DRIVER_SIGNING_PFX_BASE64 is not set: signing with a throwaway certificate.'
+              $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+                  -Subject 'CN=cros-sofaudio CI throwaway signing' `
+                  -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(2)
+              $kind = 'throwaway'
+          } else {
+              $pfxPath = Join-Path $env:RUNNER_TEMP 'cros-sofaudio-signing.pfx'
+              try {
+                  [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String(($env:DRIVER_SIGNING_PFX_BASE64 -replace '\s', '')))
+                  $password = ConvertTo-SecureString $env:DRIVER_SIGNING_PFX_PASSWORD -AsPlainText -Force
+                  $cert = Import-PfxCertificate -FilePath $pfxPath -Password $password -CertStoreLocation Cert:\CurrentUser\My
+              } finally {
+                  Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+              }
+              $kind = 'repository secret'
+          }
+          $thumbprint = $cert.Thumbprint.ToUpperInvariant()
+          # build.cmd and package.cmd (setup + uninstaller) sign with SIGN_CERT_SHA1.
+          "SIGN_CERT_SHA1=$thumbprint" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "kind=$kind" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Signing certificate ($kind): $thumbprint"
+
+      - name: Build, generate catalogs, sign, and verify
+        id: signing
+        shell: pwsh
+        run: |
+          & cmd.exe /d /c build.cmd
+          if ($LASTEXITCODE -ne 0) {
+              throw "build.cmd failed with exit code $LASTEXITCODE"
           }
 
           $certificatePath = Join-Path $env:GITHUB_WORKSPACE 'x64\Release\ChromebookAudio.cer'
@@ -171,7 +189,7 @@ jobs:
               throw "The build exported an invalid certificate thumbprint: $thumbprint"
           }
           "thumbprint=$thumbprint" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Build signed with ephemeral certificate $thumbprint"
+          Write-Host "Build signed with certificate $thumbprint (${{ steps.cert.outputs.kind }})"
 
       - name: Verify build signer identities
         shell: pwsh
@@ -270,6 +288,14 @@ jobs:
               -CertificatePath $packageCertificate `
               -Paths ($signedFiles -join ';')
 
+          $setupPath = Join-Path $env:GITHUB_WORKSPACE "dist\cros-sofaudio-pujjoteen-setup-$version.exe"
+          if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+              throw "Expected NSIS setup was not created: $setupPath"
+          }
+          & .\build-tools\Test-DriverSignatures.ps1 `
+              -CertificatePath $packageCertificate `
+              -Paths $setupPath
+
           $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $artifactName = "cros-sofaudio-$version-windows-x64-attempt-${{ github.run_attempt }}"
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -278,14 +304,16 @@ jobs:
               '### Package',
               "- File: cros-sofaudio-$version.zip",
               "- SHA-256: $hash",
-              '- Signer: ${{ steps.signing.outputs.thumbprint }}'
+              '- Signer: ${{ steps.signing.outputs.thumbprint }} (${{ steps.cert.outputs.kind }})'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload installable ZIP
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cros-sofaudio-${{ steps.version.outputs.value }}-windows-x64-attempt-${{ github.run_attempt }}
-          path: cros-sofaudio-${{ steps.version.outputs.value }}.zip
+          path: |
+            cros-sofaudio-${{ steps.version.outputs.value }}.zip
+            dist/cros-sofaudio-pujjoteen-setup-${{ steps.version.outputs.value }}.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -347,15 +375,24 @@ jobs:
             exit 1
           fi
 
+          setup_path="release-assets/dist/cros-sofaudio-pujjoteen-setup-$PACKAGE_VERSION.exe"
+          if [[ ! -f "$setup_path" ]]; then
+            echo "Expected release asset is missing: $setup_path" >&2
+            exit 1
+          fi
+
           checksum_path="release-assets/SHA256SUMS.txt"
           printf '%s  %s\n' "$actual_sha256" "$(basename "$zip_path")" > "$checksum_path"
+          printf '%s  %s\n' "$(sha256sum "$setup_path" | awk '{print $1}')" "$(basename "$setup_path")" >> "$checksum_path"
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
+          echo "setup_path=$setup_path" >> "$GITHUB_OUTPUT"
           echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
 
       - name: Create or update release
         shell: bash
         env:
           ZIP_PATH: ${{ steps.asset.outputs.zip_path }}
+          SETUP_PATH: ${{ steps.asset.outputs.setup_path }}
           CHECKSUM_PATH: ${{ steps.asset.outputs.checksum_path }}
         run: |
           set -euo pipefail
@@ -380,7 +417,7 @@ jobs:
           fi
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" "$ZIP_PATH" "$CHECKSUM_PATH" \
+            gh release upload "$tag" "$ZIP_PATH" "$SETUP_PATH" "$CHECKSUM_PATH" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
           else
@@ -394,7 +431,7 @@ jobs:
           EOF
 
             create_args=(
-              "$tag" "$ZIP_PATH" "$CHECKSUM_PATH"
+              "$tag" "$ZIP_PATH" "$SETUP_PATH" "$CHECKSUM_PATH"
               --repo "$GITHUB_REPOSITORY"
               --title "cros-sofaudio $tag"
               --generate-notes
