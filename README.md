@@ -3,7 +3,7 @@
 > [!NOTE]
 > **This branch is a fork for the Google "pujjoteen" Chromebook** (Intel
 > Alder Lake-N / N100, DSP `PCI\VEN_8086&DEV_54C8`), which has a **MAX98360A**
-> speaker amp on SSP1 and a **Realtek ALC5682I-VD** headset codec on SSP0
+> speaker amp on SSP1 and a **Realtek ALC5682I-VD** (or **-VS**) headset codec on SSP0
 > instead of volmar's MAX98373 + NAU88L25. Differences from upstream:
 >
 > * `CsAudioIntcsof` boots the Intel-signed `sof-adl-n.ri` (sof-bin v2.2.x)
@@ -11,9 +11,12 @@
 > * The pipelines are regenerated from `sof-adl-max98360a-rt5682.tplg`
 >   (`tools-gen\build_generators.cmd`; SSP1 I2S 2×32-bit, SSP0 I2S 2×25-bit,
 >   MCLK 19.2 MHz). The DMIC pipeline is unchanged (`mic-tplg = "2ch-pdm0"`).
-> * The codec drivers are CoolStar's open-source **rt5682** and **max98357a**
->   (Apache-2.0), driven over `\Callback\CsAudioCallbackAPI`; the DSP driver
->   sends rt5682 the SSP0 clocking for its PLL. `Max98373Audio`,
+> * The codec drivers are CoolStar's open-source **rt5682** (ALC5682I-VD,
+>   `ACPI\10EC5682`), **rt5682s** (ALC5682I-VS, `ACPI\RTL5682`) and
+>   **max98357a** (Apache-2.0), driven over `\Callback\CsAudioCallbackAPI`;
+>   the DSP driver sends the codec the SSP0 clocking for its PLL. Both codec
+>   drivers take the same clocking message and report the jack the same way;
+>   the installer installs the one matching the laptop's codec. `Max98373Audio`,
 >   `Nau8825Audio` and `CrosAudioTest` are removed.
 > * The endpoint switcher reads the jack type from rt5682's HID report.
 > * `build.cmd` builds with VS 2026 + WDK 10.0.28000 (runs `inf2cat` itself)

@@ -20,6 +20,7 @@ if (Test-Path $progDir) { Remove-Item $progDir -Recurse -Force -ErrorAction Sile
 $names = [ordered]@{
     'csaudiointcsof' = 'The Scape Network'
     'rt5682'         = 'CoolStar'
+    'rt5682s'        = 'CoolStar'
     'max98357a'      = 'CoolStar'
 }
 $busInstalled = (Get-ItemProperty -Path $regRoot -Name 'InstalledBusDriver' -ErrorAction SilentlyContinue).InstalledBusDriver -eq 1

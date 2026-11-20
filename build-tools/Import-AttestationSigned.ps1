@@ -19,7 +19,7 @@ param([Parameter(Mandatory = $true)][string]$SignedPackage)
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $release = Join-Path $root 'x64\Release'
-$packages = @('SklHdaudBus', 'CsAudioIntcsof', 'rt5682', 'max98357a')
+$packages = @('SklHdaudBus', 'CsAudioIntcsof', 'rt5682', 'rt5682s', 'max98357a')
 $msPublisher = 'Microsoft Windows Hardware Compatibility Publisher'
 
 $source = (Resolve-Path $SignedPackage).Path

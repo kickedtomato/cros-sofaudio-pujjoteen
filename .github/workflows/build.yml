@@ -203,6 +203,8 @@ jobs:
           $signedFiles = @(
               'x64\Release\rt5682\rt5682.sys',
               'x64\Release\rt5682\rt5682.cat',
+              'x64\Release\rt5682s\rt5682s.sys',
+              'x64\Release\rt5682s\rt5682s.cat',
               'x64\Release\max98357a\max98357a.sys',
               'x64\Release\max98357a\max98357a.cat',
               'x64\Release\SklHdaudBus\SklHdaudBus.sys',
@@ -245,7 +247,7 @@ jobs:
               'ChromebookAudio.cer', 'Install.cmd', 'install.ps1',
               'Uninstall.cmd', 'uninstall.ps1', 'Collect-Logs.cmd',
               'README.txt', 'LICENSE.txt', 'LICENCE.sof-firmware.txt', 'VERSION.txt',
-              'LICENSE.rt5682.txt', 'LICENSE.max98357a.txt',
+              'LICENSE.rt5682.txt', 'LICENSE.rt5682s.txt', 'LICENSE.max98357a.txt',
               'Switcher\csaudioendpointswitcher.exe',
               'Switcher\csaudiojackprompt.exe',
               'Drivers\SklHdaudBus\sklhdaudbus.inf',
@@ -258,6 +260,9 @@ jobs:
               'Drivers\rt5682\rt5682.inf',
               'Drivers\rt5682\rt5682.sys',
               'Drivers\rt5682\rt5682.cat',
+              'Drivers\rt5682s\rt5682s.inf',
+              'Drivers\rt5682s\rt5682s.sys',
+              'Drivers\rt5682s\rt5682s.cat',
               'Drivers\max98357a\max98357a.inf',
               'Drivers\max98357a\max98357a.sys',
               'Drivers\max98357a\max98357a.cat'

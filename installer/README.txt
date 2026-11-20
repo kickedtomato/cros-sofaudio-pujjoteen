@@ -3,7 +3,7 @@ CHROMEBOOK AUDIO FOR WINDOWS - pujjoteen (Alder Lake-N + MAX98360A + ALC5682I)
 
 Supported laptop
   Google "pujjoteen" Chromebooks: Intel Alder Lake-N (N100/N200) audio DSP,
-  Realtek ALC5682I-VD headset codec and Maxim MAX98360A speaker amp - the
+  Realtek ALC5682I-VD or -VS headset codec and Maxim MAX98360A speaker amp - the
   hardware Linux drives with the "sof-adl-max98360a-rt5682" topology. The
   installer checks for it and stops on anything else.
   Windows must run in Test Mode (the drivers are test-signed); the installer
@@ -47,6 +47,7 @@ What it contains
                           the audio DSP; speaker (SSP1), headphone and
                           headset-mic (SSP0) and internal-mic (DMIC0) pipelines
   Drivers\rt5682          ALC5682I-VD headset codec + jack detection (CoolStar)
+  Drivers\rt5682s         ALC5682I-VS headset codec + jack detection (CoolStar)
   Drivers\max98357a       MAX98360A speaker amp enable (CoolStar)
   Switcher\               auto-switch service (csaudioswitcher) and the
                           plug-in dialog (csaudiojackprompt.exe)
@@ -71,7 +72,7 @@ Problems
       reg add HKLM\SOFTWARE\CrosSofAudio /v EnableDspBoot /t REG_DWORD /d 0 /f
   - Blue screen at boot: start Safe Mode and run Uninstall.cmd.
 
-Credits / licences: CoolStar (SklHdaudBus, rt5682, max98357a, csaudio
+Credits / licences: CoolStar (SklHdaudBus, rt5682, rt5682s, max98357a, csaudio
 architecture; Apache-2.0 / BSD-3-Clause), isaiahscape (cros-sofaudio, MIT),
 Linux SOF / ASoC drivers (sequences ported), Intel SOF firmware
 (LICENCE.sof-firmware.txt, redistributable).

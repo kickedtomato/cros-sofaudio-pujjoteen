@@ -71,12 +71,14 @@ $driverCatalogs = @(
     'Drivers\SklHdaudBus\sklhdaudbus.cat',
     'Drivers\CsAudioIntcsof\csaudiointcsof.cat',
     'Drivers\rt5682\rt5682.cat',
+    'Drivers\rt5682s\rt5682s.cat',
     'Drivers\max98357a\max98357a.cat'
 )
 $driverBinaries = @(
     'Drivers\SklHdaudBus\SklHdaudBus.sys',
     'Drivers\CsAudioIntcsof\CsAudioIntcsof.sys',
     'Drivers\rt5682\rt5682.sys',
+    'Drivers\rt5682s\rt5682s.sys',
     'Drivers\max98357a\max98357a.sys'
 )
 $programs = @(
@@ -94,7 +96,12 @@ Step 'Checking hardware'
 pnputil.exe /scan-devices | Out-Null
 $present = Get-PnpDevice -ErrorAction SilentlyContinue
 $dsp   = $present | Where-Object { $_.InstanceId -match '^PCI\\VEN_8086&DEV_54C8&' }
-$codec = $present | Where-Object { $_.InstanceId -match '^ACPI\\10EC5682\\' }
+# Headset codec: ALC5682I-VD (ACPI 10EC5682, rt5682.sys) or ALC5682I-VS
+# (ACPI RTL5682, rt5682s.sys). Both use the same SSP0 link and jack reports.
+$codec = $present | Where-Object { $_.InstanceId -match '^ACPI\\(10EC5682|RTL5682)\\' } | Select-Object -First 1
+$codecName = if (-not $codec) { 'NOT FOUND' }
+             elseif ($codec.InstanceId -match '^ACPI\\RTL5682\\') { 'found (ALC5682I-VS)' }
+             else { 'found (ALC5682I-VD)' }
 $amp   = $present | Where-Object { $_.InstanceId -match '^ACPI\\MX98360A\\' }
 $ampWhere = 'found'
 
@@ -139,7 +146,7 @@ if (-not $amp) {
 }
 
 Write-Host ("  Intel Alder Lake-N audio DSP : {0}" -f $(if ($dsp) { 'found' } else { 'NOT FOUND' }))
-Write-Host ("  ALC5682I headset codec       : {0}" -f $(if ($codec) { 'found' } else { 'NOT FOUND' }))
+Write-Host ("  ALC5682I headset codec       : {0}" -f $codecName)
 Write-Host ("  MAX98360A speaker amp        : {0}" -f $(if ($amp) { $ampWhere } else { 'NOT FOUND' }))
 
 $ok = $dsp -and $codec -and $amp
@@ -407,13 +414,17 @@ reg add HKLM\SOFTWARE\CrosSofAudio\DspBoot /f | Out-Null
 Set-ItemProperty -Path $regRoot -Name 'SpeakerDspAttenDb' -Value 2 -Type DWord
 Remove-ConflictingDspDrivers
 Install-Inf 'Drivers\CsAudioIntcsof\csaudiointcsof.inf'
-Install-Inf 'Drivers\rt5682\rt5682.inf'
+# Install the driver for the codec this laptop has (both with -Force and no codec found).
+$codecIsVs = $codec -and $codec.InstanceId -match '^ACPI\\RTL5682\\'
+if (-not $codec -or -not $codecIsVs) { Install-Inf 'Drivers\rt5682\rt5682.inf' }
+if (-not $codec -or $codecIsVs)      { Install-Inf 'Drivers\rt5682s\rt5682s.inf' }
 Install-Inf 'Drivers\max98357a\max98357a.inf'
 
 Step 'Cleaning superseded driver packages'
 Remove-SupersededDriverPackages @(
     'csaudiointcsof.inf',
     'rt5682.inf',
+    'rt5682s.inf',
     'max98357a.inf',
     'sklhdaudbus.inf'
 )
@@ -465,7 +476,7 @@ $drivers = Get-CimInstance Win32_PnPSignedDriver
 foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^ACPI\\MX98360A\\' })) {
     Write-Host "  Speaker amp driver : $($d.DriverVersion) ($($d.InfName))"
 }
-foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^ACPI\\10EC5682\\' })) {
+foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^ACPI\\(10EC5682|RTL5682)\\' })) {
     Write-Host "  Headset codec      : $($d.DriverVersion) ($($d.InfName))"
 }
 foreach ($d in ($drivers | Where-Object { $_.DeviceID -match '^CSAUDIO\\ADSP' })) {

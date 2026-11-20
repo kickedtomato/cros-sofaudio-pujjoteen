@@ -31,7 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $release = Join-Path $root 'x64\Release'
-$packages = @('SklHdaudBus', 'CsAudioIntcsof', 'rt5682', 'max98357a')
+$packages = @('SklHdaudBus', 'CsAudioIntcsof', 'rt5682', 'rt5682s', 'max98357a')
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path

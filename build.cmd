@@ -9,6 +9,7 @@ set "PSModulePath="
 ::   SklHdaudBus     Intel HDA / audio DSP bus      PCI\VEN_8086&DEV_54C8
 ::   CsAudioIntcsof  SOF DSP driver + sof-adl-n.ri  CSAUDIO\ADSP&...&CTLR_DEV_54C8
 ::   rt5682          ALC5682I-VD headset codec      ACPI\10EC5682
+::   rt5682s         ALC5682I-VS headset codec      ACPI\RTL5682
 ::   max98357a       MAX98360A speaker amp          ACPI\MX98360A
 ::   csaudioendpointswitcher.exe (jack -> default endpoint service)
 ::   csaudiojackprompt.exe       (asks the plugged-in device type, user session)
@@ -23,10 +24,10 @@ set "OUT_DIR=%ROOT_DIR%x64\Release"
 set "ERROR_LOG=%ROOT_DIR%build_errors.log"
 set "FULL_LOG=%ROOT_DIR%build_full.log"
 set "BUILD_RESULT=0"
-set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 max98357a"
+set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 rt5682s max98357a"
 
 echo ====================================================================
-echo  Chromebook SOF Audio Drivers (pujjoteen: MAX98360A + ALC5682I-VD)
+echo  Chromebook SOF Audio Drivers (pujjoteen: MAX98360A + ALC5682I-VD/VS)
 echo ====================================================================
 echo.
 
@@ -106,7 +107,12 @@ if not defined INF2CAT (
 )
 for %%d in (%PACKAGES%) do (
     echo [INFO] Generating catalog for %%d...
-    "!INF2CAT!" /driver:"%OUT_DIR%\%%d" /os:10_X64 /uselocaltime >"%OUT_DIR%\%%d.inf2cat.log" 2>&1
+    rem No /uselocaltime: stampinf writes DriverVer as the UTC date, which is
+    rem "tomorrow" in local time on US evenings and fails as postdated (22.9.7).
+    if exist "%OUT_DIR%\%%d\*.cat" del /f /q "%OUT_DIR%\%%d\*.cat"
+    "!INF2CAT!" /driver:"%OUT_DIR%\%%d" /os:10_X64 >"%OUT_DIR%\%%d.inf2cat.log" 2>&1
+    rem inf2cat can exit 0 when the signability test fails, so check the output.
+    if not exist "%OUT_DIR%\%%d\*.cat" cmd /c exit 1
     if errorlevel 1 (
         type "%OUT_DIR%\%%d.inf2cat.log"
         echo [ERROR] inf2cat failed for %%d.

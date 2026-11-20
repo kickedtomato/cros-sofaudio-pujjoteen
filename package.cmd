@@ -20,7 +20,7 @@ set "ROOT_DIR=%~dp0"
 set "OUT_DIR=%ROOT_DIR%x64\Release"
 set "VERSION=v0.1.0-pujjoteen"
 if not "%~1"=="" set "VERSION=%~1"
-set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 max98357a"
+set "PACKAGES=SklHdaudBus CsAudioIntcsof rt5682 rt5682s max98357a"
 
 set "DIST_DIR=%ROOT_DIR%dist\cros-sofaudio-%VERSION%"
 set "ZIP_FILE=%ROOT_DIR%cros-sofaudio-%VERSION%.zip"
@@ -95,6 +95,7 @@ copy /y "%CERT_FILE%" "%DIST_DIR%\ChromebookAudio.cer" >nul
 copy /y "%ROOT_DIR%LICENSE" "%DIST_DIR%\LICENSE.txt" >nul
 copy /y "%ROOT_DIR%CsAudioIntcsof\LICENCE.sof-firmware-intel" "%DIST_DIR%\LICENCE.sof-firmware.txt" >nul
 copy /y "%ROOT_DIR%rt5682\LICENSE.txt" "%DIST_DIR%\LICENSE.rt5682.txt" >nul
+copy /y "%ROOT_DIR%rt5682s\LICENSE.txt" "%DIST_DIR%\LICENSE.rt5682s.txt" >nul
 copy /y "%ROOT_DIR%max98357a\LICENSE.txt" "%DIST_DIR%\LICENSE.max98357a.txt" >nul
 echo %VERSION%> "%DIST_DIR%\VERSION.txt"
 
